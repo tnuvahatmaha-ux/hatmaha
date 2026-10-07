@@ -80,7 +80,7 @@
 │  └─ tests/            יחידה + אינטגרציה מול Postgres אמיתי
 │
 └─ supabase/
-   ├─ migrations/       0001–0014, מורצות לפי הסדר
+   ├─ migrations/       0001–0016, מורצות לפי הסדר
    └─ tests/            בדיקת RLS + סקריפט הרצה מקומי
 ```
 
@@ -110,7 +110,7 @@ npm run install:all
 
 ### 2. מסד הנתונים
 
-ב-Supabase: SQL Editor ← הרצת קבצי `supabase/migrations/` **לפי הסדר**, מ-0001 ועד 0014.
+ב-Supabase: SQL Editor ← הרצת קבצי `supabase/migrations/` **לפי הסדר**, מ-0001 ועד 0016.
 
 לפיתוח מול Postgres מקומי:
 

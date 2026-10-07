@@ -12,7 +12,8 @@ import {
  * תור האישורים.
  *
  * שלושה סוגי פריטים: חריגות שמנוע החוקיות יצר, בקשות אילוץ שממתינות
- * להחלטה, והגשות זמינות שחרגו מהמכסות. כל החלטה מחייבת נימוק.
+ * להחלטה, והגשות זמינות שחרגו מהמכסות. חריגה והגשת זמינות מחייבות נימוק
+ * (§10); בקשת אילוץ רגילה מוכרעת בלחיצה אחת.
  */
 export default function Approvals() {
   const [tab, setTab] = useState('exceptions');
@@ -37,7 +38,7 @@ export default function Approvals() {
     <>
       <ViewHead
         title="בקשות ואישורים"
-        subtitle="כל מה שממתין להחלטה שלך. כל החלטה מחייבת נימוק."
+        subtitle="כל מה שממתין להחלטה שלך. בקשות — בלחיצה אחת; חריגות וזמינות — עם נימוק."
         actions={
           <Segmented
             label="סוג הפריטים"
@@ -53,7 +54,13 @@ export default function Approvals() {
       />
 
       {tab === 'exceptions' && <ExceptionsQueue query={exceptions} onChanged={reloadAll} />}
-      {tab === 'requests' && <RequestsQueue query={requests} onChanged={reloadAll} />}
+      {tab === 'requests' && (
+        <RequestsQueue
+          query={requests}
+          onChanged={reloadAll}
+          onShowExceptions={() => setTab('exceptions')}
+        />
+      )}
       {tab === 'availability' && <AvailabilityQueue query={availability} onChanged={reloadAll} />}
     </>
   );
@@ -251,107 +258,106 @@ function ExceptionDialog({ exceptionId, onClose, onDecided }) {
 
 /* ── בקשות אילוץ ──────────────────────────────────────────── */
 
-function RequestsQueue({ query, onChanged }) {
+function RequestsQueue({ query, onChanged, onShowExceptions }) {
   const toast = useToast();
-  const [deciding, setDeciding] = useState(null);
-  const [comment, setComment] = useState('');
+  // הבקשה שההחלטה עליה בדרך — כדי לנעול רק את הכפתורים שלה
+  const [pendingId, setPendingId] = useState(null);
 
   const decide = useAction(
-    async (decision) => {
-      await post(
-        `/api/requests/${deciding.id}/decision`,
-        { decision, comment: comment.trim() },
-        { idempotencyKey: newIdempotencyKey() },
-      );
-      toast.success(decision === 'approve' ? 'הבקשה אושרה' : 'הבקשה נדחתה');
-      setDeciding(null);
-      setComment('');
-      onChanged();
+    async (request, decision) => {
+      setPendingId(request.id);
+      try {
+        await post(
+          `/api/requests/${request.id}/decision`,
+          { decision },
+          { idempotencyKey: newIdempotencyKey() },
+        );
+        toast.success(
+          decision === 'approve'
+            ? `הבקשה של ${request.user_name} אושרה`
+            : `הבקשה של ${request.user_name} נדחתה`,
+        );
+        onChanged();
+      } finally {
+        setPendingId(null);
+      }
     },
     { onError: (err) => toast.error(err) },
   );
 
   return (
-    <>
-      <Panel title="בקשות שממתינות להחלטה" flush>
-        <StateView
-          loading={query.loading}
-          error={query.error}
-          onRetry={query.reload}
-          empty={!query.loading && (query.data?.requests ?? []).length === 0}
-          emptyProps={{ icon: '✓', title: 'אין בקשות שממתינות להחלטה' }}
-        >
-          <div className="table-wrap">
-            <table className="table table-cards">
-              <thead>
-                <tr><th>מטמיע</th><th>סוג</th><th>תאריך</th><th>שעות</th><th>הערה</th><th /></tr>
-              </thead>
-              <tbody>
-                {(query.data?.requests ?? []).map((request) => (
+    <Panel
+      title="בקשות שממתינות להחלטה"
+      subtitle="אישור או דחייה בלחיצה אחת. המטמיע מקבל התראה על ההחלטה."
+      flush
+    >
+      <StateView
+        loading={query.loading}
+        error={query.error}
+        onRetry={query.reload}
+        empty={!query.loading && (query.data?.requests ?? []).length === 0}
+        emptyProps={{ icon: '✓', title: 'אין בקשות שממתינות להחלטה' }}
+      >
+        <div className="table-wrap">
+          <table className="table table-cards">
+            <thead>
+              <tr><th>מטמיע</th><th>סוג</th><th>תאריך</th><th>שעות</th><th>הערה</th><th>החלטה</th></tr>
+            </thead>
+            <tbody>
+              {(query.data?.requests ?? []).map((request) => {
+                const locked = request.has_pending_exception;
+                const busy = pendingId === request.id;
+                return (
                   <tr key={request.id}>
-                    <td data-label="מטמיע" className="bold">{request.user_name}</td>
+                    <td data-label="מטמיע" className="bold">
+                      {request.user_name}
+                      {request.site_name && <div className="tiny muted">{request.site_name}</div>}
+                    </td>
                     <td data-label="סוג">{request.type_name}</td>
                     <td data-label="תאריך" className="tnum">{fmtDate(request.constraint_date)}</td>
                     <td data-label="שעות" className="tnum">
                       {request.start_time.slice(0, 5)}–{request.end_time.slice(0, 5)}
                     </td>
                     <td data-label="הערה" className="small">{request.note ?? '—'}</td>
-                    <td>
-                      <button type="button" className="btn btn-sm" onClick={() => setDeciding(request)}>
-                        החלטה
-                      </button>
+                    <td data-label="החלטה">
+                      {locked ? (
+                        <div className="stack" style={{ gap: 4 }}>
+                          <Tag tone="warn">ממתינה להחלטה בחריגה</Tag>
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={onShowExceptions}>
+                            ללשונית החריגות
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            onClick={() => decide.run(request, 'approve')}
+                            disabled={decide.busy}
+                            aria-label={`אישור הבקשה של ${request.user_name}`}
+                          >
+                            {busy ? '…' : '✓ אישור'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-danger"
+                            onClick={() => decide.run(request, 'reject')}
+                            disabled={decide.busy}
+                            aria-label={`דחיית הבקשה של ${request.user_name}`}
+                          >
+                            ✕ דחייה
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </StateView>
-      </Panel>
-
-      {deciding && (
-        <Modal
-          title={`החלטה בבקשת ${deciding.type_name}`}
-          onClose={() => { setDeciding(null); setComment(''); }}
-          footer={
-            <>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => decide.run('approve')}
-                disabled={decide.busy || comment.trim().length < 3}
-              >
-                אישור
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                onClick={() => decide.run('reject')}
-                disabled={decide.busy || comment.trim().length < 3}
-              >
-                דחייה
-              </button>
-              <button type="button" className="btn btn-ghost" onClick={() => setDeciding(null)}>ביטול</button>
-            </>
-          }
-        >
-          <dl className="grid grid-2" style={{ marginBlockEnd: 'var(--space-3)' }}>
-            <Detail label="מטמיע" value={deciding.user_name} />
-            <Detail label="תאריך" value={fmtDate(deciding.constraint_date)} />
-            <Detail label="שעות" value={`${deciding.start_time.slice(0, 5)}–${deciding.end_time.slice(0, 5)}`} />
-            <Detail label="אתר" value={deciding.site_name ?? '—'} />
-          </dl>
-
-          {deciding.note && <Notice icon="💬" title="הערת המגיש">{deciding.note}</Notice>}
-
-          <Field label="נימוק ההחלטה" required htmlFor="request-comment">
-            {(props) => (
-              <textarea {...props} value={comment} onChange={(e) => setComment(e.target.value)} />
-            )}
-          </Field>
-        </Modal>
-      )}
-    </>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </StateView>
+    </Panel>
   );
 }
 

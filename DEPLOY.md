@@ -79,6 +79,8 @@ git branch -M main && git remote add origin https://github.com/<שם-המשתמ�
    | 12 | `0012_rls.sql` | אבטחת שורות |
    | 13 | `0013_views.sql` | תצוגות |
    | 14 | `0014_seed_rules.sql` | מערך חוקים התחלתי |
+   | 15 | `0015_location_shifts.sql` | משמרות לפי מיקום וזמינות לפי חלונות שעות |
+   | 16 | `0016_qualification_display_order.sql` | סדר תצוגה לרמות הסמכה |
 
 > **הסדר קריטי.** כל קובץ נשען על מה שקדם לו. אם הרצת קובץ בסדר שגוי וקיבלת
 > שגיאה, פשוט הרץ/הריצי אותו שוב אחרי שהקודמים עברו.
@@ -102,7 +104,7 @@ git branch -M main && git remote add origin https://github.com/<שם-המשתמ�
 |---|---|---|
 | **Project URL** | `SUPABASE_URL` בשרת, ו-`VITE_SUPABASE_URL` בלקוח | ציבורי |
 | **anon / public** | `SUPABASE_ANON_KEY` בשרת, ו-`VITE_SUPABASE_ANON_KEY` בלקוח | ציבורי במכוון — RLS מגנה על הנתונים |
-| **service_role** | `SUPABASE_SERVICE_ROLE_KEY` בשרת | ⚠ **סודי** |
+| **service_role** | לא בשימוש — אין להעתיק אותו לשום מקום | ⚠ **סודי** |
 
 ומחרוזת החיבור למסד: **Project Settings** ← **Database** ← **Connection string**
 ← לשונית **URI**. בחר/י את המצב **Transaction pooler** (פורט 6543).
@@ -149,7 +151,6 @@ Render לא מבקש כרטיס אשראי בחבילה החינמית.
    | `DATABASE_URL` | מחרוזת ה-Transaction pooler משלב 2.4 |
    | `SUPABASE_URL` | ה-Project URL |
    | `SUPABASE_ANON_KEY` | ה-anon key |
-   | `SUPABASE_SERVICE_ROLE_KEY` | ה-service_role key |
    | `VITE_SUPABASE_URL` | שוב ה-Project URL — עבור הממשק |
    | `VITE_SUPABASE_ANON_KEY` | שוב ה-**anon** key (ולא service_role!) — עבור הממשק |
    | `CRON_SECRET` | מחרוזת אקראית ארוכה (ראה/י למטה) |

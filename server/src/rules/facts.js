@@ -236,6 +236,7 @@ async function loadAvailability(tx, ctx) {
        join sites s on s.id = d.site_id
       where d.user_id = $1 and d.week_start = $2
         and ($3::uuid is null or d.site_id = $3)
+        and d.status <> 'draft'               -- טיוטה שלא נשלחה אינה הצהרה
         and d.superseded_at is null and d.deleted_at is null
       order by d.revision desc limit 1`,
     [ctx.targetUserId, week, ctx.siteId ?? null],

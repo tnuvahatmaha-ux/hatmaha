@@ -413,12 +413,12 @@ select { cursor: pointer; }
 .legend-swatch { width: 12px; height: 12px; border: 1.5px solid var(--ink); }
 
 /* --------------------------------------------------------------------------
-   מטריצת הסידור — מיקום × יום × משמרת
+   מטריצת הסידור — מיקום × יום, ובכל תא משמרות המיקום
    -------------------------------------------------------------------------- */
 
 .roster-wrap { overflow-x: auto; padding-block-end: var(--space-2); }
 .roster-grid { display: grid; gap: 2px; min-width: max-content; }
-.roster-corner, .roster-dayhead, .roster-shifthead, .roster-loc {
+.roster-corner, .roster-dayhead, .roster-loc {
   border: 2px solid var(--ink);
   background: var(--surface-2);
   padding: 6px;
@@ -428,8 +428,17 @@ select { cursor: pointer; }
 .roster-loc { justify-content: flex-start; gap: 4px; white-space: nowrap; font-size: 12px; }
 .roster-dayhead { flex-direction: column; gap: 1px; }
 .roster-dayhead small { font-weight: 500; color: var(--muted); }
-.roster-shifthead { flex-direction: column; gap: 1px; font-size: 10.5px; }
-.roster-shifthead small { font-weight: 500; color: var(--muted); font-size: 9.5px; }
+/* תא (מיקום × יום): ערימה של משמרות המיקום, אחת מתחת לשנייה */
+.roster-day { display: flex; flex-direction: column; gap: 2px; }
+.roster-slot-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 4px;
+  width: 100%; font-size: 10.5px; line-height: 1.3;
+}
+.roster-slot-head .tnum { color: var(--muted); font-size: 9.5px; }
+.roster-noshifts {
+  display: flex; align-items: center; gap: 6px; padding: 6px var(--space-3);
+  background: var(--surface-2); border: 1px dashed var(--muted); font-size: 12px;
+}
 
 .roster-slot {
   border: 2px solid var(--ink);

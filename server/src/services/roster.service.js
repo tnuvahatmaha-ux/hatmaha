@@ -168,7 +168,7 @@ export async function board(versionId) {
     query(
       `select user_id, status::text as status
          from availability_declarations
-        where site_id = $1 and week_start = $2
+        where site_id = $1 and week_start = $2 and status <> 'draft'
           and superseded_at is null and deleted_at is null`,
       [version.site_id, version.week_start],
     ),

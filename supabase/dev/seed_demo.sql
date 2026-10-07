@@ -43,7 +43,7 @@ declare
   s_north uuid; s_center uuid;
   -- משמרות לפי מיקום: לכל מיקום שעות משלו
   st_m uuid; st_e uuid; st_n uuid;        -- מחלקה פנימית: 07–15 · 15–23 · 23–07
-  st_er_d uuid; st_er_n uuid;             -- חדר מיון: 07–19 · 19–07 (משמרות של 12 שעות)
+  st_er_d uuid; st_er_e uuid; st_er_n uuid; -- חדר מיון: 08–16 · 16–24 · 00–08 (שעות שונות מהמחלקה)
   st_tr uuid;                             -- חדר הדרכה: 08–16
   st_day uuid; st_aft uuid;               -- אגף מנהלה: 08–16 · 16–20
   l_ward uuid; l_er uuid; l_train uuid; l_admin uuid;
@@ -131,9 +131,11 @@ begin
   values (l_ward, 'לילה', '23:00', '07:00', false, 1, d_clin, 30) returning id into st_n;
 
   insert into shift_types (location_id, name, start_time, end_time, is_mandatory, required_staff, domain_id, display_order)
-  values (l_er, 'יום', '07:00', '19:00', true, 1, d_clin, 10) returning id into st_er_d;
+  values (l_er, 'בוקר מיון', '08:00', '16:00', true, 1, d_clin, 10) returning id into st_er_d;
   insert into shift_types (location_id, name, start_time, end_time, is_mandatory, required_staff, domain_id, display_order)
-  values (l_er, 'לילה', '19:00', '07:00', false, 1, d_clin, 20) returning id into st_er_n;
+  values (l_er, 'ערב מיון', '16:00', '00:00', true, 1, d_clin, 20) returning id into st_er_e;
+  insert into shift_types (location_id, name, start_time, end_time, is_mandatory, required_staff, domain_id, display_order)
+  values (l_er, 'לילה מיון', '00:00', '08:00', false, 1, d_clin, 30) returning id into st_er_n;
 
   insert into shift_types (location_id, name, start_time, end_time, is_mandatory, required_staff, domain_id, display_order)
   values (l_train, 'הדרכה', '08:00', '16:00', false, 1, d_clin, 10) returning id into st_tr;
@@ -247,11 +249,11 @@ begin
        ((ws + i) + time '15:00') at time zone tz, ((ws + i) + time '23:00') at time zone tz, d_clin);
   end loop;
 
-  -- לילה אחד — חוצה חצות, מסתיים ב-07:00 של היום שאחריו
+  -- ערב אחד במיון — חוצה חצות, מסתיים ב-00:00 של היום שאחריו
   insert into roster_assignments (version_id, site_id, assignment_date, location_id, user_id, shift_type_id,
                                   start_time, end_time, starts_at, ends_at, domain_id)
-  values (v_pub, s_north, ws + 2, l_er, u_itay, st_er_n, '19:00', '07:00',
-          ((ws + 2) + time '19:00') at time zone tz, ((ws + 3) + time '07:00') at time zone tz, d_clin);
+  values (v_pub, s_north, ws + 2, l_er, u_itay, st_er_e, '16:00', '00:00',
+          ((ws + 2) + time '16:00') at time zone tz, ((ws + 3) + time '00:00') at time zone tz, d_clin);
 
   update roster_versions
      set status = 'published', published_at = now() - interval '3 days', published_by = u_mgr,

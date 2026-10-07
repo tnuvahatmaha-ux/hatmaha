@@ -66,7 +66,11 @@ function AvailabilityTab() {
   );
   const current = declarations.data?.declarations?.[0];
 
-  /** המטריצה כמפה 'תאריך|משמרת' → ערך */
+  /**
+   * המטריצה כמפה 'תאריך|HH:MM-HH:MM' → ערך.
+   * העמודות הן חלונות השעות של האתר ולא משמרות: לכל מיקום משמרות משלו,
+   * ומיקומים עם אותן שעות חולקים עמודה אחת.
+   */
   const [cells, setCells] = useState({});
   const [note, setNote] = useState('');
   const [preview, setPreview] = useState(null);
@@ -79,7 +83,7 @@ function AvailabilityTab() {
     }
     const next = {};
     for (const cell of current.cells ?? []) {
-      next[`${cell.cell_date}|${cell.shift_type_id}`] = cell.value;
+      next[`${cell.cell_date}|${windowKey(cell.start_time, cell.end_time)}`] = cell.value;
     }
     setCells(next);
     setNote(current.note ?? '');
@@ -104,19 +108,21 @@ function AvailabilityTab() {
     return Object.entries(cells)
       .filter(([, value]) => value === 'cannot')
       .map(([key]) => key.split('|'))
-      .filter(([, shiftId]) => win.shiftTypes.find((s) => s.id === shiftId)?.is_mandatory)
-      .map(([date, shiftId]) => ({
+      .map(([date, key]) => ({ date, window: win.windows.find((w) => w.key === key) }))
+      .filter(({ window }) => window?.isMandatory)
+      .map(({ date, window }) => ({
         date,
-        shiftName: win.shiftTypes.find((s) => s.id === shiftId)?.name,
+        key: window.key,
+        shiftName: `${window.label} ${window.startTime}–${window.endTime}`,
       }));
   }, [cells, win]);
 
   const willNeedApproval = overCannot || overPreferNot || mandatoryCannot.length > 0;
 
   /** לחיצה מחליפה בין יכול → מעדיף שלא → לא יכול → יכול */
-  const cycle = (date, shiftTypeId) => {
+  const cycle = (date, windowKeyValue) => {
     if (readOnly) return;
-    const key = `${date}|${shiftTypeId}`;
+    const key = `${date}|${windowKeyValue}`;
     const order = ['can', 'prefer_not', 'cannot'];
     const currentValue = cells[key] ?? 'can';
     const next = order[(order.indexOf(currentValue) + 1) % order.length];
@@ -128,8 +134,9 @@ function AvailabilityTab() {
     Object.entries(cells)
       .filter(([, value]) => value !== 'can')
       .map(([key, value]) => {
-        const [date, shiftTypeId] = key.split('|');
-        return { date, shiftTypeId, value };
+        const [date, range] = key.split('|');
+        const [startTime, endTime] = range.split('-');
+        return { date, startTime, endTime, value };
       });
 
   const saveDraft = useAction(
@@ -202,18 +209,18 @@ function AvailabilityTab() {
             text="הגשת זמינות אפשרית רק אחרי שיוך לאתר. פנה/י למנהל ההטמעה."
           />
         </Panel>
-      ) : win.shiftTypes.length === 0 ? (
+      ) : win.windows.length === 0 ? (
         <Panel>
           <Empty
             icon="🕐"
             title="לא הוגדרו משמרות לאתר הזה"
-            text="לא ניתן להגיש זמינות עד שמנהל ההטמעה יגדיר את משמרות האתר."
+            text="לא ניתן להגיש זמינות עד שמנהל ההטמעה יגדיר משמרות למיקומי האתר."
           />
         </Panel>
       ) : (
         <Panel
           title={`זמינות לשבוע ${fmtWeekRange(win.weekStart)}`}
-          subtitle="לחיצה על תא מחליפה בין יכול, מעדיף שלא, ולא יכול"
+          subtitle="כל עמודה היא טווח שעות שקיים באחד המיקומים באתר. לחיצה על תא מחליפה בין יכול, מעדיף שלא, ולא יכול"
           actions={
             current && (
               <Tag tone={statusTone(current.status)}>
@@ -249,7 +256,7 @@ function AvailabilityTab() {
 
           <AvailabilityGrid
             days={win.days}
-            shiftTypes={win.shiftTypes}
+            windows={win.windows}
             cells={cells}
             onCycle={cycle}
             readOnly={readOnly}
@@ -289,7 +296,7 @@ function AvailabilityTab() {
                   <li>סומנו {counts.preferNot} תאי "מעדיף שלא", מעל המכסה של {win.limits.maxPreferNot}</li>
                 )}
                 {mandatoryCannot.map((v) => (
-                  <li key={`${v.date}-${v.shiftName}`}>
+                  <li key={`${v.date}-${v.key}`}>
                     סומן "לא יכול" במשמרת חובה {v.shiftName} ב-{fmtDate(v.date)}
                   </li>
                 ))}
@@ -372,48 +379,50 @@ function AvailabilityTab() {
   );
 }
 
-function AvailabilityGrid({ days, shiftTypes, cells, onCycle, readOnly }) {
+function AvailabilityGrid({ days, windows, cells, onCycle, readOnly }) {
   return (
     <div
       className="avail-grid"
-      style={{ gridTemplateColumns: `minmax(92px, auto) repeat(${shiftTypes.length}, minmax(76px, 1fr))` }}
+      style={{ gridTemplateColumns: `minmax(92px, auto) repeat(${windows.length}, minmax(84px, 1fr))` }}
       role="grid"
       aria-label="מטריצת זמינות שבועית"
     >
       <div className="avail-head" role="columnheader">יום</div>
-      {shiftTypes.map((shift) => (
-        <div className="avail-head" key={shift.id} role="columnheader">
-          {shift.name}
-          {shift.is_mandatory && <span className="mandatory-dot" title="משמרת חובה" />}
-          <small>{shift.start_time.slice(0, 5)}–{shift.end_time.slice(0, 5)}</small>
+      {windows.map((w) => (
+        <div className="avail-head" key={w.key} role="columnheader" title={w.locations}>
+          <span className="tnum">
+            {w.startTime}–{w.endTime}
+            {w.isMandatory && <span className="mandatory-dot" title="כולל משמרת חובה" />}
+          </span>
+          <small>{w.label}</small>
         </div>
       ))}
 
       {days.map((date) => (
-        <Row key={date} date={date} shiftTypes={shiftTypes} cells={cells} onCycle={onCycle} readOnly={readOnly} />
+        <Row key={date} date={date} windows={windows} cells={cells} onCycle={onCycle} readOnly={readOnly} />
       ))}
     </div>
   );
 }
 
-function Row({ date, shiftTypes, cells, onCycle, readOnly }) {
+function Row({ date, windows, cells, onCycle, readOnly }) {
   return (
     <>
       <div className="avail-day" role="rowheader">
         {dayName(date)}
         <small className="tnum">{fmtDate(date)}</small>
       </div>
-      {shiftTypes.map((shift) => {
-        const value = cells[`${date}|${shift.id}`] ?? 'can';
+      {windows.map((w) => {
+        const value = cells[`${date}|${w.key}`] ?? 'can';
         const meta = AVAIL_VALUES[value];
         return (
           <button
-            key={shift.id}
+            key={w.key}
             type="button"
             className={`avail-cell avail-${value}`}
-            onClick={() => onCycle(date, shift.id)}
+            onClick={() => onCycle(date, w.key)}
             disabled={readOnly}
-            aria-label={`${dayName(date)} ${fmtDate(date)}, ${shift.name}: ${meta.label}`}
+            aria-label={`${dayName(date)} ${fmtDate(date)}, ${w.startTime}–${w.endTime} (${w.label}): ${meta.label}`}
             title={meta.label}
           >
             <span aria-hidden="true">{meta.glyph}</span>
@@ -423,6 +432,9 @@ function Row({ date, shiftTypes, cells, onCycle, readOnly }) {
     </>
   );
 }
+
+/** מפתח החלון, זהה לזה שהשרת מחזיר: 'HH:MM-HH:MM' */
+const windowKey = (start, end) => `${String(start).slice(0, 5)}-${String(end).slice(0, 5)}`;
 
 function PreviewResult({ preview }) {
   const tone = preview.willBe === 'blocked' ? 'danger' : preview.willBe === 'ok' ? 'ok' : 'warn';

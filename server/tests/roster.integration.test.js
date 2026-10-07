@@ -23,8 +23,8 @@ vi.mock('../src/middleware/requireAuth.js', () => ({
 }));
 
 describeDb('סידור עבודה — שיבוץ, בדיקה ופרסום', () => {
-  let base, server, manager, noa, itay, siteId, locationId;
-  let morningId, eveningId, nightId;
+  let base, server, manager, noa, itay, siteId, locationId, erId;
+  let morningId, eveningId, nightId, erDayId;
   let weekStart, draftId;
 
   beforeAll(async () => {
@@ -51,17 +51,27 @@ describeDb('סידור עבודה — שיבוץ, בדיקה ופרסום', () =
       );
       locationId = loc.id;
 
-      const shifts = await tx.query(
-        `insert into site_shift_types (site_id, name, start_time, end_time, is_mandatory, required_staff, display_order)
-         values ($1,'בוקר','06:00','14:00', true, 1, 10),
-                ($1,'ערב','14:00','22:00', true, 1, 20),
-                ($1,'לילה','22:00','06:00', false, 1, 30)
-         returning id, name`,
+      const [er] = await tx.query(
+        `insert into locations (site_id, name) values ($1, 'חדר מיון') returning id`,
         [siteId],
       );
+      erId = er.id;
+
+      // site_id אינו נשלח: הטריגר גוזר אותו מהמיקום
+      const shifts = await tx.query(
+        `insert into shift_types (location_id, name, start_time, end_time, is_mandatory, required_staff, display_order)
+         values ($1,'בוקר','06:00','14:00', true, 1, 10),
+                ($1,'ערב','14:00','22:00', true, 1, 20),
+                ($1,'לילה','22:00','06:00', false, 1, 30),
+                ($2,'יום','07:00','19:00', false, 1, 10)
+         returning id, name, site_id`,
+        [locationId, erId],
+      );
+      expect(shifts.every((s) => s.site_id === siteId)).toBe(true);
       morningId = shifts.find((s) => s.name === 'בוקר').id;
       eveningId = shifts.find((s) => s.name === 'ערב').id;
       nightId = shifts.find((s) => s.name === 'לילה').id;
+      erDayId = shifts.find((s) => s.name === 'יום').id;
 
       await tx.query(
         `insert into site_assignments (site_id, user_id) values ($1,$2), ($1,$3)`,
@@ -120,6 +130,30 @@ describeDb('סידור עבודה — שיבוץ, בדיקה ופרסום', () =
     expect(body.status).toBe('warning');
     expect(body.warnings.map((w) => w.name)).toContain('שיבוץ רק בזמינות שהוצהרה');
     expect(body.data.user_id).toBe(noa.id);
+  });
+
+  it('הלוח אינו נשמר במטמון — שיבוץ חדש מופיע מיד', async () => {
+    // ה-ETag של הלוח הוא row_version של הגרסה, שאינו משתנה כשמוסיפים שיבוץ.
+    // בלי no-store הדפדפן היה מאמת מול המטמון, מקבל 304, ומציג לוח ישן.
+    const res = await call(`/api/roster/versions/${draftId}/board`, { as: manager.id });
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const board = await res.json();
+    expect(board.assignments.some((a) => a.user_id === noa.id)).toBe(true);
+
+    // גם דפדפן ששמר תשובה ישנה ושולח If-None-Match מקבל את הלוח המלא
+    const conditional = await fetch(`${base}/api/roster/versions/${draftId}/board`, {
+      headers: { 'x-test-user': manager.id, 'if-none-match': res.headers.get('etag') },
+    });
+    expect(conditional.status).toBe(200);
+  });
+
+  it('משמרת של מיקום אחר נדחית', async () => {
+    const res = await assign(
+      { userId: noa.id, date: addDays(weekStart, 3), locationId, shiftTypeId: erDayId },
+      'a-wrong-location',
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.message).toContain('אינה שייכת למיקום');
   });
 
   it('⭐ חפיפה נחסמת — משמרת לילה נמשכת אל תוך היום שאחריה', async () => {
@@ -262,9 +296,12 @@ describeDb('סידור עבודה — שיבוץ, בדיקה ופרסום', () =
     expect(body.created).toBeGreaterThan(0);
 
     const board = await (await call(`/api/roster/versions/${body.targetVersionId}/board`, { as: manager.id })).json();
-    // נועה הייתה בבוקר; אחרי רוטציה היא בערב
+    // נועה הייתה בבוקר; אחרי רוטציה היא בערב — של אותו מיקום
     const noaShift = board.assignments.find((a) => a.user_id === noa.id);
     expect(noaShift.shift_type_id).toBe(eveningId);
+    expect(noaShift.location_id).toBe(locationId);
+    // הלוח מחזיר לכל משמרת את המיקום שלה
+    expect(board.shiftTypes.find((s) => s.id === erDayId).location_id).toBe(erId);
   });
 
   it('ייצוא CSV מכיל BOM כדי ש-Excel בעברית יפתח נכון', async () => {

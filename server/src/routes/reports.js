@@ -73,7 +73,7 @@ reportsRouter.get(
   async (req, res) => res.json({ rows: await workload(req.validQuery) }),
 );
 
-/** כיסוי משמרות: תקן מול בפועל, לכל יום ומשמרת */
+/** כיסוי משמרות: תקן מול בפועל, לכל יום, מיקום ומשמרת */
 reportsRouter.get(
   '/coverage',
   requirePermission('reports', 'view', (req) => ({ siteId: req.query.siteId })),
@@ -83,19 +83,22 @@ reportsRouter.get(
     const rows = await query(
       `
       with days as (select generate_series($2::date, $3::date, '1 day')::date as d)
-      select days.d as date, st.id as shift_type_id, st.name as shift_name,
+      select days.d as date, l.id as location_id, l.name as location_name,
+             st.id as shift_type_id, st.name as shift_name,
              st.required_staff,
              count(ra.id)::int as assigned,
              greatest(st.required_staff - count(ra.id), 0)::int as gap
         from days
-        join site_shift_types st on st.site_id = $1 and st.deleted_at is null and st.is_active
+        join shift_types st on st.site_id = $1 and st.deleted_at is null and st.is_active
+        join locations l on l.id = st.location_id and l.deleted_at is null and l.is_active
         left join roster_assignments ra
                on ra.assignment_date = days.d and ra.shift_type_id = st.id
               and ra.deleted_at is null
               and ra.version_id in (select id from roster_versions
                                      where site_id = $1 and status = 'published' and deleted_at is null)
-       group by days.d, st.id, st.name, st.required_staff, st.display_order
-       order by days.d, st.display_order
+       group by days.d, l.id, l.name, st.id, st.name, st.required_staff,
+                st.display_order, st.start_time
+       order by days.d, l.name, st.display_order, st.start_time
       `,
       [siteId, from, to],
     );

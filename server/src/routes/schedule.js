@@ -39,7 +39,7 @@ scheduleRouter.get(
         join roster_versions v on v.id = ra.version_id
         join sites s on s.id = ra.site_id
         join locations l on l.id = ra.location_id
-        left join site_shift_types st on st.id = ra.shift_type_id
+        left join shift_types st on st.id = ra.shift_type_id
        where ra.user_id = $1 and ra.deleted_at is null
          and v.status = 'published' and v.deleted_at is null
          and ra.assignment_date between $2 and $3

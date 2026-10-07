@@ -11,7 +11,7 @@ import { assertIfMatch } from '../lib/etag.js';
  * בקשות אילוץ — חופשה, אילוץ שעות, מחלה.
  *
  * המסלול: יצירה כטיוטה → בדיקה מקדימה (אופציונלית) → הגשה.
- * בהגשה רצים חוקי ה-trigger 'submit', ואז מדיניות האתר לסוג הבקשה קובעת
+ * בהגשה רצים חוקי ה-trigger 'submit', ואז כלל האישור הגנרי של סוג הבקשה קובע
  * אם היא מאושרת אוטומטית או ממתינה להחלטת מנהל.
  */
 
@@ -24,7 +24,10 @@ const BASE_SELECT = `
          ct.name_he as type_name, ct.code as type_code,
          p.full_name as user_name,
          approver.full_name as approver_name,
-         s.name as site_name
+         s.name as site_name,
+         exists (select 1 from exception_requests er
+                  where er.subject_type = 'constraint' and er.subject_id = cr.id
+                    and er.status = 'pending') as has_pending_exception
     from constraint_requests cr
     join constraint_types ct on ct.id = cr.constraint_type_id
     join profiles p on p.id = cr.user_id
@@ -309,23 +312,40 @@ export async function decide(actor, requestId, { decision, comment, traceId }) {
       // אידמפוטנטי: החלטה חוזרת מחזירה את מה שכבר נקבע
       return { request: await getIn(tx, requestId), alreadyDecided: true };
     }
-    if (!comment?.trim()) {
-      throw new AppError('E_VALIDATION', 'החלטה מחייבת נימוק');
+
+    // בקשה שחרגה מחוק ממתינה להחלטה על החריגה, שמחייבת נימוק (§10).
+    // אישור ישיר כאן היה עוקף את החוק בלחיצה אחת.
+    const [pending] = await tx.query(
+      `select id from exception_requests
+        where subject_type = 'constraint' and subject_id = $1 and status = 'pending'
+        limit 1`,
+      [requestId],
+    );
+    if (pending) {
+      throw new AppError(
+        'E_PENDING_APPROVAL',
+        'לבקשה יש חריגה מחוק שממתינה להחלטה. יש להכריע בה בלשונית החריגות.',
+        { status: 409, details: { exceptionId: pending.id } },
+      );
     }
+
+    // אישור או דחייה בלחיצה אחת: הנימוק רשות
+    const approved = decision === 'approve';
+    const note = comment?.trim() || null;
 
     await tx.query(
       `update constraint_requests
           set status = $2::request_status, approver_user_id = $3,
               decided_at = now(), decision_note = $4
         where id = $1`,
-      [requestId, decision === 'approve' ? 'approved' : 'rejected', actor.userId, comment.trim()],
+      [requestId, approved ? 'approved' : 'rejected', actor.userId, note],
     );
 
     await notify(tx, {
       typeCode: 'request_decided',
       recipientIds: [row.user_id],
-      title: decision === 'approve' ? 'הבקשה אושרה' : 'הבקשה נדחתה',
-      body: comment.trim(),
+      title: approved ? 'הבקשה אושרה' : 'הבקשה נדחתה',
+      body: note ?? (approved ? 'הבקשה שלך אושרה על ידי המנהל' : 'הבקשה שלך נדחתה על ידי המנהל'),
       entityType: 'constraint_requests',
       entityId: requestId,
     });

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useApi, useAction } from '../lib/useApi.js';
-import { get, post, patch, put, del } from '../lib/api.js';
+import { get, post, patch, del } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
 import {
@@ -11,8 +11,9 @@ import { fmtDateFull, fmtClock, today } from '../lib/format.js';
 /**
  * ניהול אתרים.
  *
- * כל אתר מגדיר את מה שמניע את שאר המערכת: משמרות (כולל דגל חובה ותקן
- * כוח אדם), תקופות, מיקומים, מדיניות אישור אילוצים ומכסות הזמינות.
+ * כל אתר מגדיר את מה שמניע את שאר המערכת: מיקומים, ולכל מיקום המשמרות
+ * שלו (כולל דגל חובה ותקן כוח אדם), תקופות ומכסות הזמינות.
+ * כללי אישור האילוצים גנריים לכל האתרים, ונערכים בהגדרות.
  */
 export default function Sites() {
   const toast = useToast();
@@ -25,7 +26,7 @@ export default function Sites() {
     <>
       <ViewHead
         title="אתרים"
-        subtitle="הגדרת אתרי ההטמעה — משמרות, מיקומים, תקופות וכללי אישור"
+        subtitle="הגדרת אתרי ההטמעה — מיקומים, משמרות לכל מיקום ותקופות"
         actions={
           <>
             <label className="check">
@@ -127,7 +128,7 @@ function SiteCard({ site, onEdit, onChanged }) {
           </>
         }
       >
-        <SiteDetail siteId={site.id} onChanged={onChanged} />
+        <SiteDetail siteId={site.id} />
       </Accordion>
 
       {confirmArchive && (
@@ -149,36 +150,18 @@ function SiteCard({ site, onEdit, onChanged }) {
   );
 }
 
-function SiteDetail({ siteId, onChanged }) {
+const PERIODS = [
+  { value: 'training', label: 'הכשרה' },
+  { value: 'golive', label: 'עלייה לאוויר' },
+  { value: 'support', label: 'תמיכה' },
+];
+
+function SiteDetail({ siteId }) {
   const toast = useToast();
   const detail = useApi(`/api/sites/${siteId}`);
-  const [shiftForm, setShiftForm] = useState(null);
   const [locationForm, setLocationForm] = useState(null);
 
   const data = detail.data;
-
-  const savePolicy = useAction(
-    async (constraintTypeId, approvalMode) => {
-      await put(`/api/sites/${siteId}/constraint-policies`, {
-        policies: [{ constraintTypeId, approvalMode }],
-      });
-      detail.reload();
-    },
-    { onError: (err) => toast.error(err) },
-  );
-
-  const removeShift = useAction(
-    async (id) => {
-      const result = await del(`/api/sites/${siteId}/shift-types/${id}`);
-      toast.success(
-        result.removed === 'soft'
-          ? 'המשמרת הוסרה מהתצוגה — היא נשמרה כי כבר נעשה בה שימוש'
-          : 'המשמרת נמחקה',
-      );
-      detail.reload();
-    },
-    { onError: (err) => toast.error(err) },
-  );
 
   return (
     <StateView loading={detail.loading} error={detail.error} onRetry={detail.reload}>
@@ -201,68 +184,10 @@ function SiteDetail({ siteId, onChanged }) {
             <Info label="תיאור" value={data.site.description ?? '—'} />
           </div>
 
-          {/* משמרות */}
+          {/* מיקומים, ולכל מיקום המשמרות שלו */}
           <Panel
-            title="משמרות האתר"
-            subtitle="משמרת חובה: סימון ״לא יכול״ עליה מעביר את ההגשה לאישור מיוחד"
-            actions={
-              <button type="button" className="btn btn-sm btn-primary" onClick={() => setShiftForm({})}>
-                + משמרת
-              </button>
-            }
-            flush
-          >
-            {data.shiftTypes.length === 0 ? (
-              <Empty
-                icon="🕐"
-                title="לא הוגדרו משמרות"
-                text="בלי משמרות לא ניתן לבנות סידור ולא ניתן להגיש זמינות."
-              />
-            ) : (
-              <div className="table-wrap">
-                <table className="table table-cards">
-                  <thead>
-                    <tr><th>שם</th><th>שעות</th><th>חובה</th><th>תקן</th><th>תחום</th><th /></tr>
-                  </thead>
-                  <tbody>
-                    {data.shiftTypes.map((shift) => (
-                      <tr key={shift.id}>
-                        <td data-label="שם" className="bold">{shift.name}</td>
-                        <td data-label="שעות" className="tnum">
-                          {fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}
-                          {shift.crosses_midnight && <Tag tone="accent"> חוצה חצות</Tag>}
-                        </td>
-                        <td data-label="חובה">
-                          {shift.is_mandatory ? <Tag tone="accent">חובה</Tag> : <Tag>גמישה</Tag>}
-                        </td>
-                        <td data-label="תקן" className="tnum">{shift.required_staff}</td>
-                        <td data-label="תחום">{shift.domain_name ?? '—'}</td>
-                        <td>
-                          <div className="row" style={{ gap: 4 }}>
-                            <button type="button" className="btn btn-sm" onClick={() => setShiftForm(shift)}>
-                              עריכה
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-sm"
-                              onClick={() => removeShift.run(shift.id)}
-                              disabled={removeShift.busy}
-                            >
-                              הסרה
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Panel>
-
-          {/* מיקומים */}
-          <Panel
-            title="מיקומים"
+            title="מיקומים ומשמרות"
+            subtitle="לכל מיקום שעות משלו. משמרת חובה: סימון ״לא יכול״ על השעות שלה מעביר את ההגשה לאישור מיוחד"
             actions={
               <button type="button" className="btn btn-sm btn-primary" onClick={() => setLocationForm({})}>
                 + מיקום
@@ -271,97 +196,216 @@ function SiteDetail({ siteId, onChanged }) {
             flush
           >
             {data.locations.length === 0 ? (
-              <Empty icon="📍" title="לא הוגדרו מיקומים" />
+              <Empty
+                icon="📍"
+                title="לא הוגדרו מיקומים"
+                text="המשמרות מוגדרות לכל מיקום. בלי מיקום לא ניתן לבנות סידור ולא ניתן להגיש זמינות."
+              />
             ) : (
-              <div className="table-wrap">
-                <table className="table table-cards">
-                  <thead>
-                    <tr><th>שם</th><th>סוג</th><th>תיאור</th><th>סטטוס</th><th /></tr>
-                  </thead>
-                  <tbody>
-                    {data.locations.map((location) => (
-                      <tr key={location.id}>
-                        <td data-label="שם" className="bold">{location.name}</td>
-                        <td data-label="סוג">{location.location_type_name ?? '—'}</td>
-                        <td data-label="תיאור" className="small">{location.description ?? '—'}</td>
-                        <td data-label="סטטוס">
-                          {location.is_active ? <Tag tone="ok">פעיל</Tag> : <Tag>מושבת</Tag>}
-                        </td>
-                        <td>
-                          <button type="button" className="btn btn-sm" onClick={() => setLocationForm(location)}>
-                            עריכה
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              data.locations.map((location) => (
+                <LocationShifts
+                  key={location.id}
+                  siteId={siteId}
+                  location={location}
+                  onEdit={() => setLocationForm(location)}
+                  onChanged={detail.reload}
+                />
+              ))
             )}
           </Panel>
-
-          {/* מדיניות אישור אילוצים */}
-          <Panel
-            title="כללי אישור אילוצים"
-            subtitle="לכל סוג בקשה — אישור אוטומטי, או העברה להחלטת מנהל"
-            flush
-          >
-            <div className="table-wrap">
-              <table className="table table-cards">
-                <thead>
-                  <tr><th>סוג הבקשה</th><th>מדיניות</th></tr>
-                </thead>
-                <tbody>
-                  {data.constraintPolicies.map((policy) => (
-                    <tr key={policy.constraint_type_id}>
-                      <td data-label="סוג הבקשה" className="bold">{policy.name_he}</td>
-                      <td data-label="מדיניות">
-                        <div className="row" style={{ gap: 0 }}>
-                          {[
-                            { value: 'auto', label: 'אישור אוטומטי' },
-                            { value: 'manager', label: 'דורש אישור' },
-                          ].map((option) => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              className={`btn btn-sm${policy.approval_mode === option.value ? ' btn-primary' : ''}`}
-                              onClick={() => savePolicy.run(policy.constraint_type_id, option.value)}
-                              disabled={savePolicy.busy}
-                              aria-pressed={policy.approval_mode === option.value}
-                              style={{ marginInlineStart: -2 }}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
-
-          {shiftForm && (
-            <ShiftForm
-              siteId={siteId}
-              shift={shiftForm.id ? shiftForm : null}
-              onClose={() => setShiftForm(null)}
-              onSaved={() => { setShiftForm(null); detail.reload(); toast.success('המשמרת נשמרה'); }}
-            />
-          )}
 
           {locationForm && (
             <LocationForm
               siteId={siteId}
               location={locationForm.id ? locationForm : null}
               onClose={() => setLocationForm(null)}
-              onSaved={() => { setLocationForm(null); detail.reload(); toast.success('המיקום נשמר'); }}
+              onSaved={(saved) => {
+                setLocationForm(null);
+                detail.reload();
+                toast.success(
+                  saved?.copiedShifts
+                    ? `המיקום נשמר, ונוספו ${saved.copiedShifts} משמרות מהתבנית של סוג המיקום`
+                    : 'המיקום נשמר',
+                );
+              }}
             />
           )}
         </>
       )}
     </StateView>
+  );
+}
+
+/** מיקום אחד: פרטים, והמשמרות שלו */
+function LocationShifts({ siteId, location, onEdit, onChanged }) {
+  const toast = useToast();
+  const [shiftForm, setShiftForm] = useState(null);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const shifts = location.shiftTypes.filter((s) => s.is_active);
+  const base = `/api/sites/${siteId}/locations/${location.id}/shift-types`;
+
+  const removeShift = useAction(
+    async (id) => {
+      const result = await del(`${base}/${id}`);
+      toast.success(
+        result.removed === 'soft'
+          ? 'המשמרת הוסרה מהתצוגה — היא נשמרה כי כבר נעשה בה שימוש'
+          : 'המשמרת נמחקה',
+      );
+      onChanged();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <Accordion
+      defaultOpen
+      title={
+        <>
+          {location.name}
+          {!location.is_active && <Tag> מושבת</Tag>}
+        </>
+      }
+      meta={
+        <>
+          {location.location_type_name ?? 'ללא סוג'} · {shifts.length} משמרות
+        </>
+      }
+      actions={
+        <>
+          <button type="button" className="btn btn-sm btn-primary" onClick={() => setShiftForm({})}>
+            + משמרת
+          </button>
+          {location.location_type_id && (
+            <button type="button" className="btn btn-sm" onClick={() => setTemplateOpen(true)}>
+              העתקה מתבנית
+            </button>
+          )}
+          <button type="button" className="btn btn-sm" onClick={onEdit}>עריכת מיקום</button>
+        </>
+      }
+    >
+      {location.description && <p className="small muted">{location.description}</p>}
+
+      {shifts.length === 0 ? (
+        <Empty
+          icon="🕐"
+          title="למיקום הזה אין משמרות"
+          text={
+            location.location_type_id
+              ? 'אפשר להוסיף משמרת, או להעתיק את התבנית של סוג המיקום.'
+              : 'הוסיפו משמרת כדי שאפשר יהיה לשבץ במיקום הזה.'
+          }
+        />
+      ) : (
+        <div className="table-wrap">
+          <table className="table table-cards">
+            <thead>
+              <tr><th>שם</th><th>שעות</th><th>חובה</th><th>תקן</th><th>תחום</th><th /></tr>
+            </thead>
+            <tbody>
+              {shifts.map((shift) => (
+                <tr key={shift.id}>
+                  <td data-label="שם" className="bold">{shift.name}</td>
+                  <td data-label="שעות" className="tnum">
+                    {fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}
+                    {shift.crosses_midnight && <Tag tone="accent"> חוצה חצות</Tag>}
+                  </td>
+                  <td data-label="חובה">
+                    {shift.is_mandatory ? <Tag tone="accent">חובה</Tag> : <Tag>גמישה</Tag>}
+                  </td>
+                  <td data-label="תקן" className="tnum">{shift.required_staff}</td>
+                  <td data-label="תחום">{shift.domain_name ?? '—'}</td>
+                  <td>
+                    <div className="row" style={{ gap: 4 }}>
+                      <button type="button" className="btn btn-sm" onClick={() => setShiftForm(shift)}>
+                        עריכה
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => removeShift.run(shift.id)}
+                        disabled={removeShift.busy}
+                        aria-label={`הסרת משמרת ${shift.name} ב${location.name}`}
+                      >
+                        הסרה
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {shiftForm && (
+        <ShiftForm
+          endpoint={base}
+          locationName={location.name}
+          shift={shiftForm.id ? shiftForm : null}
+          onClose={() => setShiftForm(null)}
+          onSaved={() => { setShiftForm(null); onChanged(); toast.success('המשמרת נשמרה'); }}
+        />
+      )}
+
+      {templateOpen && (
+        <TemplateCopy
+          endpoint={`${base}/from-template`}
+          location={location}
+          onClose={() => setTemplateOpen(false)}
+          onDone={(result) => {
+            setTemplateOpen(false);
+            onChanged();
+            toast.success(
+              result.added
+                ? `נוספו ${result.added} משמרות מהתבנית`
+                : 'כל המשמרות שבתבנית כבר קיימות במיקום',
+            );
+          }}
+        />
+      )}
+    </Accordion>
+  );
+}
+
+/** הוספת משמרות מתבנית סוג המיקום. משמרת בשם שכבר קיים אינה נדרסת. */
+function TemplateCopy({ endpoint, location, onClose, onDone }) {
+  const toast = useToast();
+  const [period, setPeriod] = useState('training');
+
+  const copy = useAction(
+    async () => onDone(await post(endpoint, { period })),
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <Modal
+      title={`העתקת משמרות מתבנית — ${location.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn-primary" onClick={() => copy.run()} disabled={copy.busy}>
+            {copy.busy ? 'מעתיק…' : 'העתקה'}
+          </button>
+          <button type="button" className="btn" onClick={onClose}>ביטול</button>
+        </>
+      }
+    >
+      <p className="small" style={{ marginBlockEnd: 'var(--space-3)' }}>
+        יתווספו המשמרות שמוגדרות לסוג המיקום ״{location.location_type_name}״ בתקופה שתבחרו.
+        משמרת שכבר קיימת במיקום באותו שם לא תשתנה.
+      </p>
+      <Field label="תקופה">
+        {(props) => (
+          <select {...props} value={period} onChange={(e) => setPeriod(e.target.value)}>
+            {PERIODS.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+        )}
+      </Field>
+    </Modal>
   );
 }
 
@@ -504,7 +548,7 @@ function SiteForm({ site, onClose, onSaved }) {
   );
 }
 
-function ShiftForm({ siteId, shift, onClose, onSaved }) {
+function ShiftForm({ endpoint, locationName, shift, onClose, onSaved }) {
   const toast = useToast();
   const domains = useApi('/api/settings/domains');
 
@@ -520,7 +564,7 @@ function ShiftForm({ siteId, shift, onClose, onSaved }) {
   const save = useAction(
     async () => {
       await post(
-        `/api/sites/${siteId}/shift-types`,
+        endpoint,
         { ...form, id: shift?.id, domainId: form.domainId || null },
         { ifMatch: shift?.row_version },
       );
@@ -533,7 +577,7 @@ function ShiftForm({ siteId, shift, onClose, onSaved }) {
 
   return (
     <Modal
-      title={shift ? `עריכת משמרת ${shift.name}` : 'משמרת חדשה'}
+      title={shift ? `עריכת משמרת ${shift.name} — ${locationName}` : `משמרת חדשה — ${locationName}`}
       onClose={onClose}
       footer={
         <>
@@ -621,12 +665,12 @@ function LocationForm({ siteId, location, onClose, onSaved }) {
 
   const save = useAction(
     async () => {
-      await post(
+      const result = await post(
         `/api/sites/${siteId}/locations`,
         { ...form, id: location?.id, locationTypeId: form.locationTypeId || null },
         { ifMatch: location?.row_version },
       );
-      onSaved();
+      onSaved(result.location);
     },
     { onError: (err) => toast.error(err) },
   );
@@ -652,7 +696,11 @@ function LocationForm({ siteId, location, onClose, onSaved }) {
 
       <Field
         label="סוג המיקום"
-        hint="שעות הפעילות ותבניות המשמרת לכל תקופה מוגדרות בהגדרות ← סוגי מיקום"
+        hint={
+          location
+            ? 'שינוי הסוג אינו משנה את המשמרות הקיימות. אפשר להוסיף מהתבנית בכפתור ״העתקה מתבנית״.'
+            : 'מיקום חדש מקבל את המשמרות מהתבנית של הסוג, לפי התקופה הנוכחית באתר. אפשר לערוך אותן אחר כך.'
+        }
       >
         {(props) => (
           <select {...props} value={form.locationTypeId}

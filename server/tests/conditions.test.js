@@ -196,16 +196,22 @@ describe('mandatoryTraining', () => {
 
 describe('availabilityRequired', () => {
   const base = shift('2026-11-16', '06:00', '14:00');
+  const avail = (worst, status = 'ok', declared = true) => ({ availability: { declared, worst, status } });
 
   it('עובר כשהוצהר "יכול"', () => {
-    expect(run('availabilityRequired', base, {}, { availability: { value: 'can', status: 'ok' } }).passed).toBe(true);
+    expect(run('availabilityRequired', base, {}, avail('can')).passed).toBe(true);
   });
-  it('נכשל כשלא הוצהר דבר', () => {
+  it('נכשל כשלא הוגשה הצהרה לשבוע', () => {
     expect(run('availabilityRequired', base, {}, { availability: null }).passed).toBe(false);
+    const r = run('availabilityRequired', base, {}, avail('can', 'none', false));
+    expect(r.passed).toBe(false);
+    expect(r.detail).toContain('לא הוגשה');
   });
   it('מבחין בין "לא יכול" מוכרע לבין ממתין לאישור', () => {
-    const decided = run('availabilityRequired', base, {}, { availability: { value: 'cannot', status: 'ok' } });
-    const pending = run('availabilityRequired', base, {}, { availability: { value: 'cannot', status: 'pending_approval' } });
+    const decided = run('availabilityRequired', base, {}, avail('cannot'));
+    const pending = run('availabilityRequired', base, {}, avail('cannot', 'pending_approval'));
+    expect(decided.passed).toBe(false);
+    expect(decided.detail).toContain('לא יכול');
     expect(decided.detail).not.toContain('ממתין');
     expect(pending.detail).toContain('ממתין');
   });
@@ -235,6 +241,13 @@ describe('minStaffCoverage', () => {
   it('עובר כשכל המשמרות מאוישות', () => {
     const coverage = [{ assignment_date: '2026-11-16', shift_name: 'בוקר', required_staff: 2, assigned: 2 }];
     expect(run('minStaffCoverage', {}, {}, { coverage }).passed).toBe(true);
+  });
+  it('מציין את המיקום של המשמרת החסרה', () => {
+    const coverage = [{
+      assignment_date: '2026-11-16', location_name: 'חדר מיון', shift_name: 'לילה',
+      required_staff: 1, assigned: 0,
+    }];
+    expect(run('minStaffCoverage', {}, {}, { coverage }).detail).toContain('חדר מיון');
   });
   it('מדווח על החוסרים ומגביל את האורך', () => {
     const coverage = Array.from({ length: 8 }, (_, i) => ({

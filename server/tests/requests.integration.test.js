@@ -136,6 +136,52 @@ describeDb('בקשות אילוץ — מנוע החוקיות מקצה לקצה'
     expect(body.request.status).toBe('submitted');
   });
 
+  it('אישור בקשה רגילה בלחיצה אחת — בלי נימוק', async () => {
+    const request = await makeRequest({ constraintDate: addDays(today(), 31) });
+    await call(`/api/requests/${request.id}/submit`, {
+      as: noa.id, method: 'POST', key: `submit-${request.id}`,
+    });
+
+    const res = await call(`/api/requests/${request.id}/decision`, {
+      as: manager.id, method: 'POST', key: `decide-${request.id}`, body: { decision: 'approve' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.request.status).toBe('approved');
+    expect(body.request.decision_note).toBeNull();
+
+    // המטמיעה מקבלת התראה גם בלי נימוק
+    const inbox = await (await call('/api/notifications', { as: noa.id })).json();
+    expect(inbox.notifications.some((n) => n.title === 'הבקשה אושרה')).toBe(true);
+  });
+
+  it('כלל האישור הגנרי חל על כל האתרים וניתן לשינוי ע״י המנהל', async () => {
+    const rules = await (await call('/api/settings/constraint-approval', { as: manager.id })).json();
+    expect(rules.rules.find((r) => r.id === vacationId).approval_mode).toBe('manager');
+
+    const set = (mode) =>
+      call(`/api/settings/constraint-approval/${vacationId}`, {
+        as: manager.id, method: 'PUT', body: { approvalMode: mode },
+      });
+
+    // מטמיעה אינה רשאית לשנות כללים
+    const denied = await call(`/api/settings/constraint-approval/${vacationId}`, {
+      as: noa.id, method: 'PUT', body: { approvalMode: 'auto' },
+    });
+    expect(denied.status).toBe(403);
+
+    expect((await set('auto')).status).toBe(200);
+    const request = await makeRequest({ constraintDate: addDays(today(), 32) });
+    const res = await call(`/api/requests/${request.id}/submit`, {
+      as: noa.id, method: 'POST', key: `submit-${request.id}`,
+    });
+    const body = await res.json();
+    expect(body.request.status).toBe('approved');
+    expect(body.request.auto_approved).toBe(true);
+
+    expect((await set('manager')).status).toBe(200);
+  });
+
   it('AC-10: בקשה שחורגת מחוק אינה נכנסת לתוקף לפני החלטה', async () => {
     const request = await makeRequest({
       constraintTypeId: sickId,               // מחלה = אישור אוטומטי לפי ברירת המחדל
@@ -157,6 +203,23 @@ describeDb('בקשות אילוץ — מנוע החוקיות מקצה לקצה'
     const queue = await (await call('/api/exceptions?mine=true', { as: mentor.id })).json();
     expect(queue.exceptions).toHaveLength(1);
     expect(queue.exceptions[0].target_name).toBe('נועה פרץ');
+  });
+
+  it('בקשה עם חריגה פתוחה אינה ניתנת לאישור ישיר — רק דרך החריגה', async () => {
+    const queue = await (await call('/api/exceptions?mine=true', { as: mentor.id })).json();
+    const requestId = queue.exceptions[0].subject_id;
+
+    const list = await (await call('/api/requests?status=submitted', { as: manager.id })).json();
+    expect(list.requests.find((r) => r.id === requestId).has_pending_exception).toBe(true);
+
+    const res = await call(`/api/requests/${requestId}/decision`, {
+      as: manager.id, method: 'POST', key: `bypass-${requestId}`, body: { decision: 'approve' },
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe('E_PENDING_APPROVAL');
+
+    const after = await (await call(`/api/requests/${requestId}`, { as: manager.id })).json();
+    expect(after.request.status).toBe('submitted');
   });
 
   it('החלטה ללא נימוק נדחית', async () => {

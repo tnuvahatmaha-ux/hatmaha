@@ -106,7 +106,7 @@ requestsRouter.post(
     params: idParam,
     body: z.object({
       decision: z.enum(['approve', 'reject']),
-      comment: z.string().trim().min(3, 'החלטה מחייבת נימוק של 3 תווים לפחות').max(1000),
+      comment: z.string().trim().max(1000).optional(),
     }),
   }),
   async (req, res) => {

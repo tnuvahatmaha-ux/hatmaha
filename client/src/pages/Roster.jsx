@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useApi, useAction } from '../lib/useApi.js';
 import { post, del, download, newIdempotencyKey } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
@@ -15,8 +16,9 @@ import {
 /**
  * בונה הסידור.
  *
- * מטריצה: שורות = מיקומים, עמודות = שבעה ימים × משמרות האתר.
- * לכל תא מוצגים השיבוצים הקיימים והמועמדים להוספה — כשלצד כל שם מופיע
+ * מטריצה: שורות = מיקומים, עמודות = שבעה ימים. לכל מיקום משמרות משלו,
+ * ולכן כל תא (מיקום × יום) מכיל ערימה של המשמרות של אותו מיקום.
+ * לכל משמרת מוצגים השיבוצים הקיימים והמועמדים להוספה — כשלצד כל שם מופיע
  * סימון הזמינות שלו. זו הנקודה שבה המשבץ רואה את המידע לפני שהוא טועה,
  * במקום לגלות את הבעיה אחרי הפרסום.
  */
@@ -208,14 +210,13 @@ export default function Roster() {
                     </div>
                   )}
 
-                  {board.data.shiftTypes.length === 0 ? (
+                  {board.data.locations.length === 0 ? (
                     <Empty
-                      icon="🕐"
-                      title="לא הוגדרו משמרות לאתר הזה"
-                      text="המטריצה בנויה על משמרות האתר. יש להגדיר אותן במסך האתרים."
+                      icon="📍"
+                      title="לא הוגדרו מיקומים לאתר הזה"
+                      text="המשמרות מוגדרות לכל מיקום, במסך האתרים."
+                      action={<Link className="btn btn-sm" to="/sites">למסך האתרים</Link>}
                     />
-                  ) : board.data.locations.length === 0 ? (
-                    <Empty icon="📍" title="לא הוגדרו מיקומים לאתר הזה" />
                   ) : layout === 'matrix' ? (
                     <RosterMatrix
                       board={board.data}
@@ -279,41 +280,22 @@ export default function Roster() {
    ========================================================================== */
 
 function RosterMatrix({ board, editable, onChanged }) {
-  const { days, locations, shiftTypes, assignments } = board;
-  const columns = days.length * shiftTypes.length;
+  const { days, locations } = board;
 
   return (
     <div className="roster-wrap">
       <div
         className="roster-grid"
-        style={{ gridTemplateColumns: `minmax(120px, auto) repeat(${columns}, minmax(98px, 1fr))` }}
+        style={{ gridTemplateColumns: `minmax(120px, auto) repeat(${days.length}, minmax(132px, 1fr))` }}
       >
-        <div className="roster-corner" style={{ gridRow: 'span 2' }}>מיקום</div>
+        <div className="roster-corner">מיקום</div>
 
         {days.map((date) => (
-          <div
-            key={date}
-            className="roster-dayhead"
-            style={{ gridColumn: `span ${shiftTypes.length}` }}
-          >
+          <div key={date} className="roster-dayhead">
             {dayName(date)}
             <small className="tnum">{fmtDate(date)}</small>
           </div>
         ))}
-
-        {days.map((date) =>
-          shiftTypes.map((shift) => (
-            <div className="roster-shifthead" key={`${date}-${shift.id}`}>
-              <span>
-                {shift.name}
-                {shift.is_mandatory && <span className="mandatory-dot" title="משמרת חובה" />}
-              </span>
-              <small className="tnum">
-                {fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}
-              </small>
-            </div>
-          )),
-        )}
 
         {locations.map((location) => (
           <LocationRow
@@ -330,6 +312,7 @@ function RosterMatrix({ board, editable, onChanged }) {
         <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--surface-2)' }} />פנוי</span>
         <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--success-bg)' }} />מאויש</span>
         <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--warn-bg)' }} />מאויש עם התראה</span>
+        <span className="legend-item"><span className="mandatory-dot" />משמרת חובה</span>
         <span className="legend-item">סימון הזמינות מוצג לצד כל שם ברשימת ההוספה</span>
       </div>
     </div>
@@ -337,28 +320,40 @@ function RosterMatrix({ board, editable, onChanged }) {
 }
 
 function LocationRow({ location, board, editable, onChanged }) {
+  const shifts = board.shiftTypes.filter((s) => s.location_id === location.id);
+
   return (
     <>
       <div className="roster-loc">
         <span aria-hidden="true">📍</span>
         {location.name}
       </div>
-      {board.days.map((date) =>
-        board.shiftTypes.map((shift) => (
-          <Slot
-            key={`${location.id}-${date}-${shift.id}`}
-            board={board}
-            location={location}
-            date={date}
-            shift={shift}
-            editable={editable}
-            onChanged={onChanged}
-          />
-        )),
+      {shifts.length === 0 ? (
+        <div className="roster-noshifts" style={{ gridColumn: `span ${board.days.length}` }}>
+          למיקום הזה לא הוגדרו משמרות. <Link to="/sites">הגדרת משמרות במסך האתרים</Link>
+        </div>
+      ) : (
+        board.days.map((date) => (
+          <div className="roster-day" key={`${location.id}-${date}`}>
+            {shifts.map((shift) => (
+              <Slot
+                key={shift.id}
+                board={board}
+                location={location}
+                date={date}
+                shift={shift}
+                editable={editable}
+                onChanged={onChanged}
+              />
+            ))}
+          </div>
+        ))
       )}
     </>
   );
 }
+
+const AVAIL_RANK = { can: 0, prefer_not: 1, cannot: 2 };
 
 function Slot({ board, location, date, shift, editable, onChanged }) {
   const toast = useToast();
@@ -369,10 +364,20 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
 
   /** סימון הזמינות של אדם למשמרת הזו — זה מה שמונע שיבוץ שגוי */
   const flagsFor = (userId) => {
-    const cell = board.availability.find(
-      (a) => a.user_id === userId && a.cell_date === date && a.shift_type_id === shift.id,
+    const shiftRange = localRange(date, shift.start_time, shift.end_time);
+    const declaration = board.declarations?.find((d) => d.user_id === userId);
+
+    // הערך המחמיר מבין חלונות הזמינות שחופפים למשמרת
+    let worst = null;
+    for (const cell of board.availability) {
+      if (cell.user_id !== userId) continue;
+      const range = localRange(cell.cell_date, cell.start_time, cell.end_time);
+      if (!overlaps(range, shiftRange)) continue;
+      if (!worst || AVAIL_RANK[cell.value] > AVAIL_RANK[worst.value]) worst = cell;
+    }
+    const blocked = board.constraints.find(
+      (c) => c.user_id === userId && overlaps({ start: new Date(c.starts_at), end: new Date(c.ends_at) }, shiftRange),
     );
-    const blocked = board.constraints.find((c) => c.user_id === userId && overlapsShift(c, date, shift));
 
     const flags = [];
     if (blocked) {
@@ -381,23 +386,28 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
         label: blocked.status === 'approved' ? `⛔ ${blocked.type_name}` : `${blocked.type_name} ממתין`,
       });
     }
-    if (cell?.value === 'cannot') {
+    if (worst?.value === 'cannot') {
       flags.push({
-        severity: cell.status === 'pending_approval' ? 'warning' : 'blocking',
-        label: cell.status === 'pending_approval' ? 'לא יכול (ממתין)' : 'לא יכול',
+        severity: worst.status === 'pending_approval' ? 'warning' : 'blocking',
+        label: worst.status === 'pending_approval' ? 'לא יכול (ממתין)' : 'לא יכול',
       });
-    } else if (cell?.value === 'prefer_not') {
+    } else if (worst?.value === 'prefer_not') {
       flags.push({ severity: 'warning', label: 'מעדיף שלא' });
-    } else if (cell) {
+    } else if (declaration) {
+      // הוגשה הצהרה ואין חלון חופף: "יכול" הוא ברירת המחדל ואינו נשמר
       flags.push({ severity: 'ok', label: '✓ זמין' });
+    } else {
+      flags.push({ severity: 'info', label: 'לא הוגשה זמינות' });
     }
     return flags;
   };
 
+  const isIssue = (f) => f.severity === 'blocking' || f.severity === 'warning';
+
   const assignedIds = inCell.map((a) => a.user_id);
   const candidates = board.people.filter((p) => !assignedIds.includes(p.id));
 
-  const hasIssue = inCell.some((a) => flagsFor(a.user_id).some((f) => f.severity !== 'ok') || a.warning_text);
+  const hasIssue = inCell.some((a) => flagsFor(a.user_id).some(isIssue) || a.warning_text);
   const status = inCell.length === 0 ? 'vacant' : hasIssue ? 'issue' : 'covered';
 
   const assign = useAction(
@@ -429,9 +439,17 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
 
   return (
     <div className={`roster-slot ${status}`}>
+      <div className="roster-slot-head">
+        <span className="bold">
+          {shift.name}
+          {shift.is_mandatory && <span className="mandatory-dot" title="משמרת חובה" />}
+        </span>
+        <span className="tnum">{fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}</span>
+      </div>
+
       {inCell.map((assignment) => {
         const flags = flagsFor(assignment.user_id);
-        const issue = flags.some((f) => f.severity !== 'ok');
+        const issue = flags.some(isIssue);
         const tooltip = [...flags.map((f) => f.label), assignment.warning_text].filter(Boolean).join(' · ');
 
         return (
@@ -476,13 +494,19 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
   );
 }
 
-/** האם אילוץ חופף למשמרת ביום מסוים. חישוב גס בלקוח — השרת הוא הקובע. */
-function overlapsShift(constraint, date, shift) {
-  const start = new Date(`${date}T${shift.start_time}`);
-  let end = new Date(`${date}T${shift.end_time}`);
+/**
+ * טווח שעות מקומי ליום מסוים; סיום שאינו אחרי ההתחלה נמשך ליום שלמחרת.
+ * חישוב גס בלקוח לצורך הסימון בלבד — השרת, עם אזור הזמן של האתר, הוא הקובע.
+ */
+function localRange(date, startTime, endTime) {
+  const start = new Date(`${date}T${fmtClock(startTime)}`);
+  let end = new Date(`${date}T${fmtClock(endTime)}`);
   if (end <= start) end = new Date(end.getTime() + 86_400_000);
-  return new Date(constraint.starts_at) < end && start < new Date(constraint.ends_at);
+  return { start, end };
 }
+
+/** חפיפה בטווח חצי פתוח: משמרות צמודות אינן חופפות */
+const overlaps = (a, b) => a.start < b.end && b.start < a.end;
 
 /* ==========================================================================
    תצוגת רשימה
@@ -767,7 +791,7 @@ function DuplicateDialog({ versionId, weekStart, onClose, onDone }) {
             <span>
               <span className="bold">שכפול עם רוטציית משמרות</span>
               <div className="small muted">
-                כל שיבוץ עובר למשמרת הבאה בתור שהוגדר באתר (בוקר ← ערב ← לילה ← בוקר).
+                כל שיבוץ עובר למשמרת הבאה של אותו מיקום (בוקר ← ערב ← לילה ← בוקר).
               </div>
             </span>
           </label>

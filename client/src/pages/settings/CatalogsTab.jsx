@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useApi, useAction } from '../../lib/useApi.js';
-import { post } from '../../lib/api.js';
+import { post, put } from '../../lib/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { usePermissions } from '../../context/PermissionsContext.jsx';
 import { Panel, StateView, Tag, Empty } from '../../components/ui/index.jsx';
 
 /**
@@ -18,6 +19,7 @@ const CATALOGS = [
 export default function CatalogsTab() {
   return (
     <>
+      <ApprovalRulesPanel />
       {CATALOGS.map((catalog) => (
         <CatalogPanel key={catalog.kind} {...catalog} />
       ))}
@@ -94,6 +96,89 @@ function CatalogPanel({ kind, label, hint }) {
         </div>
         <p className="tiny muted mt-3">
           פריט שהיה בשימוש אינו נמחק — הוא מושבת, כדי שנתונים היסטוריים יישארו מוסברים.
+        </p>
+      </StateView>
+    </Panel>
+  );
+}
+
+/**
+ * כללי אישור אילוצים — אחד לכל סוג בקשה, וחל על כל האתרים.
+ * "אוטומטי" מאשר את הבקשה מיד בהגשה; "דורש אישור" מעביר אותה לתור.
+ * חוקי מנוע החוקיות (למשל הודעה מוקדמת) עדיין חלים בשני המצבים.
+ */
+function ApprovalRulesPanel() {
+  const toast = useToast();
+  const { can } = usePermissions();
+  const rules = useApi('/api/settings/constraint-approval');
+  const editable = can('settings', 'manage');
+
+  const setMode = useAction(
+    async (rule, approvalMode) => {
+      if (rule.approval_mode === approvalMode) return;
+      await put(`/api/settings/constraint-approval/${rule.id}`, { approvalMode });
+      rules.reload();
+      toast.success(
+        approvalMode === 'auto'
+          ? `${rule.name_he}: בקשות יאושרו אוטומטית בכל האתרים`
+          : `${rule.name_he}: בקשות יועברו לאישור בכל האתרים`,
+      );
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <Panel
+      title="כללי אישור אילוצים"
+      subtitle="לכל סוג בקשה — אישור אוטומטי בהגשה, או העברה להחלטת מנהל. הכלל חל על כל האתרים."
+      flush
+    >
+      <StateView
+        loading={rules.loading}
+        error={rules.error}
+        onRetry={rules.reload}
+        empty={!rules.loading && (rules.data?.rules ?? []).length === 0}
+        emptyProps={{ icon: '📋', title: 'לא הוגדרו סוגי בקשות' }}
+      >
+        <div className="table-wrap">
+          <table className="table table-cards">
+            <thead>
+              <tr><th>סוג הבקשה</th><th>כלל אישור</th></tr>
+            </thead>
+            <tbody>
+              {(rules.data?.rules ?? []).map((rule) => (
+                <tr key={rule.id}>
+                  <td data-label="סוג הבקשה" className="bold">
+                    {rule.name_he}
+                    {!rule.is_active && <Tag> מושבת</Tag>}
+                  </td>
+                  <td data-label="כלל אישור">
+                    <div className="row" style={{ gap: 0 }} role="group" aria-label={`כלל האישור של ${rule.name_he}`}>
+                      {[
+                        { value: 'auto', label: 'אישור אוטומטי' },
+                        { value: 'manager', label: 'דורש אישור' },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`btn btn-sm${rule.approval_mode === option.value ? ' btn-primary' : ''}`}
+                          onClick={() => setMode.run(rule, option.value)}
+                          disabled={!editable || setMode.busy}
+                          aria-pressed={rule.approval_mode === option.value}
+                          style={{ marginInlineStart: -2 }}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="tiny muted" style={{ padding: 'var(--space-3) var(--space-4)' }}>
+          גם בבקשה שמאושרת אוטומטית, חוקי החוקיות (כמו הודעה מוקדמת) נבדקים קודם — וחריגה מהם עוברת לאישור.
         </p>
       </StateView>
     </Panel>

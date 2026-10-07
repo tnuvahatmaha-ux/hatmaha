@@ -58,7 +58,19 @@ export function createApp() {
   app.use(requestContext);
 
   app.use(healthRouter);
-  app.use('/api', rateLimit({ windowMs: 60_000, max: 300 }), apiRouter);
+  // נתוני API אישיים ומשתנים: אסור לדפדפן לשמור או לאמת אותם מול מטמון.
+  // ה-ETag כאן הוא row_version לנעילה אופטימית ולא תיאור של התשובה — למשל
+  // הלוח של גרסת סידור שומר על אותו ETag גם כשנוספים לו שיבוצים, ובלי
+  // no-store הדפדפן היה מקבל 304 ומציג את הלוח הישן.
+  const noStore = (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    // דפדפן שכבר שמר תשובה ישנה עדיין שולח If-None-Match; בלי זה Express
+    // היה עונה 304. If-Match (נעילה אופטימית) אינו מושפע.
+    delete req.headers['if-none-match'];
+    delete req.headers['if-modified-since'];
+    next();
+  };
+  app.use('/api', noStore, rateLimit({ windowMs: 60_000, max: 300 }), apiRouter);
 
   // משימות מתוזמנות — סוד משותף, לא טוקן משתמש. מחוץ ל-/api בכוונה,
   // כדי שלא יתערבב עם נתיבים שדורשים הזדהות של אדם.
