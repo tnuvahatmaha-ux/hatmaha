@@ -1,0 +1,20 @@
+{
+  "name": "hatmaha",
+  "private": true,
+  "description": "מערכת לניהול צוות הטמעה — monorepo (client + server + supabase)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "install:all": "npm --prefix client install && npm --prefix server install",
+    "dev:client": "npm --prefix client run dev",
+    "dev:server": "npm --prefix server run dev",
+    "build": "npm --prefix client run build",
+    "render-build": "npm --prefix client ci --include=dev && npm --prefix client run build && npm --prefix server ci --omit=dev",
+    "start": "npm --prefix server start",
+    "test": "npm --prefix server test && npm --prefix client test",
+    "test:db": "./supabase/tests/run_local.sh",
+    "db:start": "./scripts/dev-db.sh",
+    "db:reset": "./scripts/dev-db.sh --reset"
+  }
+}

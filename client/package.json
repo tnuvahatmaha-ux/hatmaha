@@ -1,0 +1,26 @@
+{
+  "name": "hatmaha-client",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ממשק המשתמש של מערכת ניהול צוות הטמעה",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.95.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.27.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@vitejs/plugin-react": "^4.3.3",
+    "jsdom": "^29.1.1",
+    "vite": "^5.4.10",
+    "vitest": "^4.1.11"
+  }
+}

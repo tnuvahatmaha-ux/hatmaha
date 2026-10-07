@@ -1,0 +1,26 @@
+{
+  "name": "hatmaha-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "שרת API למערכת ניהול צוות הטמעה",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --env-file-if-exists=.env --watch src/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "helmet": "^8.0.0",
+    "pg": "^8.13.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0"
+  }
+}
