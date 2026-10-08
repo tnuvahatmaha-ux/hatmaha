@@ -66,6 +66,8 @@ export function PermissionsProvider({ children }) {
       domains: state.me?.domains ?? [],
       mentors: state.me?.mentors ?? [],
       missingAssignments: state.me?.missingAssignments ?? [],
+      // מנהל הטמעה אינו משובץ, ולכן אינו מגיש זמינות או אילוצים לעצמו
+      submitsAvailability: state.me?.submitsAvailability ?? true,
       can,
       refresh,
       reload: load,

@@ -1,3 +1,4 @@
+import { MapPin } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi, useAction } from '../lib/useApi.js';
@@ -281,6 +282,8 @@ export default function Roster() {
 
 function RosterMatrix({ board, editable, onChanged }) {
   const { days, locations } = board;
+  // שבוע שחוצה את מועד העלייה לאוויר: לכל יום תגית שלב
+  const mixedPhases = new Set(Object.values(board.phases ?? {})).size > 1;
 
   return (
     <div className="roster-wrap">
@@ -294,6 +297,9 @@ function RosterMatrix({ board, editable, onChanged }) {
           <div key={date} className="roster-dayhead">
             {dayName(date)}
             <small className="tnum">{fmtDate(date)}</small>
+            {mixedPhases && board.phases?.[date] && (
+              <span className={`phase phase-${board.phases[date]}`}>{PHASE_NAMES[board.phases[date]]}</span>
+            )}
           </div>
         ))}
 
@@ -325,7 +331,7 @@ function LocationRow({ location, board, editable, onChanged }) {
   return (
     <>
       <div className="roster-loc">
-        <span aria-hidden="true">📍</span>
+        <MapPin size={14} aria-hidden="true" style={{ color: 'var(--muted)' }} />
         {location.name}
       </div>
       {shifts.length === 0 ? (
@@ -333,9 +339,22 @@ function LocationRow({ location, board, editable, onChanged }) {
           למיקום הזה לא הוגדרו משמרות. <Link to="/sites">הגדרת משמרות במסך האתרים</Link>
         </div>
       ) : (
-        board.days.map((date) => (
+        board.days.map((date) => {
+          // המיקומים והמשמרות של היום נקבעים לפי שלב האתר באותו יום.
+          // משמרת שכבר שובצו בה נשארת גלויה, כדי ששיבוץ לא "ייעלם".
+          const phase = board.phases?.[date];
+          const locationOn = !phase || !location.periods || location.periods.includes(phase);
+          const dayShifts = shifts.filter((s) =>
+            (locationOn && (!phase || !s.period || s.period === phase)) ||
+            board.assignments.some((a) => a.shift_type_id === s.id && a.assignment_date === date));
+          return (
           <div className="roster-day" key={`${location.id}-${date}`}>
-            {shifts.map((shift) => (
+            {dayShifts.length === 0 && (
+              <div className="roster-noshifts tiny" style={{ minHeight: 56 }}>
+                {locationOn ? 'אין משמרות בשלב הזה' : `לא פעיל ב${PHASE_NAMES[phase] ?? 'שלב הזה'}`}
+              </div>
+            )}
+            {dayShifts.map((shift) => (
               <Slot
                 key={shift.id}
                 board={board}
@@ -347,13 +366,15 @@ function LocationRow({ location, board, editable, onChanged }) {
               />
             ))}
           </div>
-        ))
+          );
+        })
       )}
     </>
   );
 }
 
 const AVAIL_RANK = { can: 0, prefer_not: 1, cannot: 2 };
+const PHASE_NAMES = { training: 'הכשרה', golive: 'עלייה לאוויר', support: 'ליווי' };
 
 function Slot({ board, location, date, shift, editable, onChanged }) {
   const toast = useToast();

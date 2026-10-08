@@ -12,6 +12,7 @@ import availabilityRequired from './conditions/availabilityRequired.js';
 import deadline from './conditions/deadline.js';
 import blackoutDates from './conditions/blackoutDates.js';
 import minStaffCoverage from './conditions/minStaffCoverage.js';
+import minShiftsPerCategory from './conditions/minShiftsPerCategory.js';
 
 /**
  * מרשם סוגי התנאים.
@@ -23,6 +24,7 @@ const modules = [
   noOverlap, maxHoursPerDay, minRestHours, maxConsecutiveHours, withinSiteHours,
   minNoticeDays, maxConstraintsPerWeek, requiresQualification, mentorRatio,
   mandatoryTraining, availabilityRequired, deadline, blackoutDates, minStaffCoverage,
+  minShiftsPerCategory,
 ];
 
 export const conditionRegistry = new Map(modules.map((m) => [m.code, m]));

@@ -7,6 +7,8 @@ import { setETag } from '../lib/etag.js';
 import { uuid, idParam } from '../schemas/common.schema.js';
 import * as schema from '../schemas/sites.schema.js';
 import * as svc from '../services/sites.service.js';
+import { decide } from '../permissions/engine.js';
+import { AppError } from '../lib/errors.js';
 
 export const sitesRouter = Router();
 sitesRouter.use(requireAuth);
@@ -100,6 +102,21 @@ sitesRouter.post(
     res.json(
       await svc.copyShiftsFromTemplate(req.user, req.params.siteId, req.params.locationId, req.body?.period),
     ),
+);
+
+/** העתקת שעות משמרת מתחום לתחום — באותו אתר או לאתר אחר */
+sitesRouter.post(
+  '/:siteId/shift-types/copy-domain',
+  requirePermission('sites', 'edit', siteScope),
+  validate({ params: z.object({ siteId: uuid }), body: schema.copyDomainBody }),
+  async (req, res) => {
+    const target = req.body.targetSiteId;
+    if (target && target !== req.params.siteId
+        && !decide(req.user, 'sites', 'edit', { siteId: target }).allowed) {
+      throw new AppError('E_FORBIDDEN', 'אין לך הרשאה לערוך את אתר היעד');
+    }
+    res.json(await svc.copyDomainShifts(req.user, req.params.siteId, req.body));
+  },
 );
 
 /* ── מיקומים ── */

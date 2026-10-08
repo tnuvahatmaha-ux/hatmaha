@@ -112,9 +112,84 @@ export async function updateProfile(actor, userId, input, req) {
       ],
     );
 
-    invalidatePrincipal(userId);
-    return row;
+    const warnings = isSelfEdit ? [] : await applyRoleChange(tx, actor, current, row);
+    if (warnings.length) invalidatePrincipal();
+    else invalidatePrincipal(userId);
+    return { ...row, warnings };
   });
+}
+
+const ROLE_NAMES = { manager: 'מנהל הטמעה', mentor: 'מדריך', lead: 'מטמיע מוביל', implementer: 'מטמיע' };
+
+/**
+ * שינוי תפקיד בסיס סוגר את מה שכבר לא מתאים לתפקיד החדש, כדי שלא יישארו
+ * שיוכים שהמנוע היה מסרב ליצור: מדריך שהוא גם "מטמיע" של מדריך אחר,
+ * או מטמיע שעדיין מחזיק צוות.
+ */
+async function applyRoleChange(tx, actor, before, after) {
+  const from = before.base_role;
+  const to = after.base_role;
+  if (from === to) return [];
+
+  if (actor.baseRole !== 'manager') {
+    throw new AppError('E_FORBIDDEN', 'רק מנהל הטמעה יכול לשנות תפקיד');
+  }
+
+  if (from === 'manager') {
+    const [others] = await tx.query(
+      `select count(*)::int as n from profiles
+        where base_role = 'manager' and status = 'active' and deleted_at is null and id <> $1`,
+      [after.id],
+    );
+    if (others.n === 0) {
+      throw new AppError('E_VALIDATION', 'לא ניתן לשנות את התפקיד של מנהל ההטמעה האחרון במערכת');
+    }
+  }
+
+  const warnings = [];
+  const isTrainee = (r) => r === 'implementer' || r === 'lead';
+
+  if (isTrainee(from) && !isTrainee(to)) {
+    const ended = await tx.query(
+      `update mentor_assignments set to_date = current_date
+        where implementer_user_id = $1 and deleted_at is null
+          and (to_date is null or to_date > current_date)
+        returning id`,
+      [after.id],
+    );
+    if (ended.length) warnings.push(`הסתיימו ${ended.length} שיוכי מדריך שהיו למשתמש כמטמיע`);
+  }
+
+  if (from === 'mentor') {
+    const team = await tx.query(
+      `update mentor_assignments set to_date = current_date
+        where mentor_user_id = $1 and deleted_at is null
+          and (to_date is null or to_date > current_date)
+        returning id`,
+      [after.id],
+    );
+    const resp = await tx.query(
+      `update mentor_responsibilities set to_date = current_date
+        where mentor_user_id = $1 and deleted_at is null
+          and (to_date is null or to_date > current_date)
+        returning id`,
+      [after.id],
+    );
+    if (team.length) warnings.push(`${team.length} מטמיעים נשארו ללא המדריך הזה`);
+    if (resp.length) warnings.push(`הסתיימו ${resp.length} תחומי אחריות של המדריך`);
+  }
+
+  await notify(tx, {
+    typeCode: 'permission_changed',
+    recipientIds: [after.id],
+    title: 'התפקיד שלך עודכן',
+    body: `התפקיד שלך במערכת הוא עכשיו ${ROLE_NAMES[to]}`,
+    entityType: 'profiles',
+    entityId: after.id,
+  });
+
+  warnings.unshift(`התפקיד שונה מ${ROLE_NAMES[from]} ל${ROLE_NAMES[to]}`);
+  return warnings;
 }
 
 /** שיוך לתחומים — החלפה מלאה */
@@ -246,7 +321,13 @@ export async function invite(actor, input) {
       'select id from profiles where email = $1 and deleted_at is null',
       [input.email],
     );
-    if (existing) throw new AppError('E_DUPLICATE', 'כתובת הדוא״ל כבר קיימת במערכת');
+    if (existing) {
+      throw new AppError(
+        'E_DUPLICATE',
+        'כתובת הדוא״ל כבר קיימת במערכת. כדי לשנות את התפקיד של משתמש קיים — פתח/י אותו ברשימת האנשים',
+        { details: { existingUserId: existing.id } },
+      );
+    }
 
     if (input.mentorUserId) {
       await assertMentorCovers(tx, input.mentorUserId, {

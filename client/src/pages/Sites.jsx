@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApi, useAction } from '../lib/useApi.js';
-import { get, post, patch, del } from '../lib/api.js';
+import { get, post, patch, put, del } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
 import {
-  Panel, StateView, Tag, Notice, Field, Modal, Accordion, Empty, ConfirmDialog,
+  Panel, StateView, Tag, Notice, Field, Modal, Accordion, Empty, ConfirmDialog, Segmented,
 } from '../components/ui/index.jsx';
 import { fmtDateFull, fmtClock, today } from '../lib/format.js';
 
@@ -115,7 +115,7 @@ function SiteCard({ site, onEdit, onChanged }) {
         meta={
           <>
             <Tag tone={site.status_code === 'golive' ? 'accent' : ''}>{site.status_name}</Tag>
-            {site.go_live_date && <Tag>Go Live: {fmtDateFull(site.go_live_date)}</Tag>}
+            {site.go_live_date && <Tag>עלייה לאוויר: {fmtDateFull(site.go_live_date)}</Tag>}
             <Tag>{site.people_count} אנשים</Tag>
           </>
         }
@@ -153,13 +153,23 @@ function SiteCard({ site, onEdit, onChanged }) {
 const PERIODS = [
   { value: 'training', label: 'הכשרה' },
   { value: 'golive', label: 'עלייה לאוויר' },
-  { value: 'support', label: 'תמיכה' },
+  { value: 'support', label: 'ליווי' },
 ];
+const PERIOD_NAME = Object.fromEntries(PERIODS.map((p) => [p.value, p.label]));
+const CATEGORIES = [
+  { value: 'morning', label: 'בוקר' },
+  { value: 'afternoon', label: 'צהריים' },
+  { value: 'night', label: 'לילה' },
+];
+const CATEGORY_NAME = Object.fromEntries(CATEGORIES.map((c) => [c.value, c.label]));
+/** אותה גזירה שבמסד: 05–12 בוקר, 12–19 צהריים, השאר לילה */
+const categoryFor = (start) => (start >= '05:00' && start < '12:00' ? 'morning' : start >= '12:00' && start < '19:00' ? 'afternoon' : 'night');
 
 function SiteDetail({ siteId }) {
   const toast = useToast();
   const detail = useApi(`/api/sites/${siteId}`);
   const [locationForm, setLocationForm] = useState(null);
+  const [copyDomain, setCopyDomain] = useState(false);
 
   const data = detail.data;
 
@@ -182,16 +192,27 @@ function SiteDetail({ siteId }) {
               }
             />
             <Info label="תיאור" value={data.site.description ?? '—'} />
+            <Info
+              label="השלב היום"
+              value={<span className={`phase phase-${data.phaseToday}`}>{PERIOD_NAME[data.phaseToday]}</span>}
+            />
           </div>
+
+          <PhasesEditor siteId={siteId} site={data.site} periods={data.periods} onSaved={detail.reload} />
 
           {/* מיקומים, ולכל מיקום המשמרות שלו */}
           <Panel
             title="מיקומים ומשמרות"
             subtitle="לכל מיקום שעות משלו. משמרת חובה: סימון ״לא יכול״ על השעות שלה מעביר את ההגשה לאישור מיוחד"
             actions={
-              <button type="button" className="btn btn-sm btn-primary" onClick={() => setLocationForm({})}>
-                + מיקום
-              </button>
+              <>
+                <button type="button" className="btn btn-sm" onClick={() => setCopyDomain(true)}>
+                  העתקת שעות מתחום…
+                </button>
+                <button type="button" className="btn btn-sm btn-primary" onClick={() => setLocationForm({})}>
+                  + מיקום
+                </button>
+              </>
             }
             flush
           >
@@ -214,6 +235,20 @@ function SiteDetail({ siteId }) {
             )}
           </Panel>
 
+          {copyDomain && (
+            <CopyDomainShifts
+              siteId={siteId}
+              locations={data.locations}
+              onClose={() => setCopyDomain(false)}
+              onDone={(r) => {
+                setCopyDomain(false);
+                detail.reload();
+                toast.success(`הועתקו ${r.created} משמרות${r.replaced ? `, הוחלפו ${r.replaced}` : ''}${r.skipped ? `, ${r.skipped} כבר היו קיימות` : ''}`);
+                if (r.missingLocations?.length) toast.warn(`באתר היעד אין מיקום בשם: ${r.missingLocations.join(', ')}`);
+              }}
+            />
+          )}
+
           {locationForm && (
             <LocationForm
               siteId={siteId}
@@ -224,7 +259,7 @@ function SiteDetail({ siteId }) {
                 detail.reload();
                 toast.success(
                   saved?.copiedShifts
-                    ? `המיקום נשמר, ונוספו ${saved.copiedShifts} משמרות מהתבנית של סוג המיקום`
+                    ? `המיקום נשמר, ונוספו ${saved.copiedShifts} משמרות ממאגר המיקומים`
                     : 'המיקום נשמר',
                 );
               }}
@@ -241,7 +276,10 @@ function LocationShifts({ siteId, location, onEdit, onChanged }) {
   const toast = useToast();
   const [shiftForm, setShiftForm] = useState(null);
   const [templateOpen, setTemplateOpen] = useState(false);
-  const shifts = location.shiftTypes.filter((s) => s.is_active);
+  const periods = location.periods ?? PERIODS.map((p) => p.value);
+  const [phase, setPhase] = useState('all');
+  const allShifts = location.shiftTypes.filter((s) => s.is_active);
+  const shifts = allShifts.filter((s) => phase === 'all' || !s.period || s.period === phase);
   const base = `/api/sites/${siteId}/locations/${location.id}/shift-types`;
 
   const removeShift = useAction(
@@ -268,12 +306,16 @@ function LocationShifts({ siteId, location, onEdit, onChanged }) {
       }
       meta={
         <>
-          {location.location_type_name ?? 'ללא סוג'} · {shifts.length} משמרות
+          {allShifts.length} משמרות
+          {periods.length < 3 && periods.map((p) => (
+            <span key={p} className={`phase phase-${p}`}>{PERIOD_NAME[p]}</span>
+          ))}
         </>
       }
       actions={
         <>
-          <button type="button" className="btn btn-sm btn-primary" onClick={() => setShiftForm({})}>
+          <button type="button" className="btn btn-sm btn-primary"
+            onClick={() => setShiftForm({ period: phase === 'all' ? null : phase })}>
             + משמרת
           </button>
           {location.location_type_id && (
@@ -286,6 +328,17 @@ function LocationShifts({ siteId, location, onEdit, onChanged }) {
       }
     >
       {location.description && <p className="small muted">{location.description}</p>}
+
+      {allShifts.some((s) => s.period) && (
+        <div style={{ marginBlockEnd: 'var(--space-3)' }}>
+          <Segmented
+            label={`שלב — ${location.name}`}
+            value={phase}
+            onChange={setPhase}
+            options={[{ value: 'all', label: 'כל השלבים' }, ...PERIODS.filter((p) => periods.includes(p.value))]}
+          />
+        </div>
+      )}
 
       {shifts.length === 0 ? (
         <Empty
@@ -301,7 +354,7 @@ function LocationShifts({ siteId, location, onEdit, onChanged }) {
         <div className="table-wrap">
           <table className="table table-cards">
             <thead>
-              <tr><th>שם</th><th>שעות</th><th>חובה</th><th>תקן</th><th>תחום</th><th /></tr>
+              <tr><th>שם</th><th>שעות</th><th>סוג</th><th>שלב</th><th>חובה</th><th>תקן</th><th>תחום</th><th /></tr>
             </thead>
             <tbody>
               {shifts.map((shift) => (
@@ -310,6 +363,12 @@ function LocationShifts({ siteId, location, onEdit, onChanged }) {
                   <td data-label="שעות" className="tnum">
                     {fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}
                     {shift.crosses_midnight && <Tag tone="accent"> חוצה חצות</Tag>}
+                  </td>
+                  <td data-label="סוג">{CATEGORY_NAME[shift.category] ?? '—'}</td>
+                  <td data-label="שלב">
+                    {shift.period
+                      ? <span className={`phase phase-${shift.period}`}>{PERIOD_NAME[shift.period]}</span>
+                      : <span className="muted small">כל השלבים</span>}
                   </td>
                   <td data-label="חובה">
                     {shift.is_mandatory ? <Tag tone="accent">חובה</Tag> : <Tag>גמישה</Tag>}
@@ -344,6 +403,8 @@ function LocationShifts({ siteId, location, onEdit, onChanged }) {
           endpoint={base}
           locationName={location.name}
           shift={shiftForm.id ? shiftForm : null}
+          defaultPeriod={shiftForm.period ?? null}
+          periods={periods}
           onClose={() => setShiftForm(null)}
           onSaved={() => { setShiftForm(null); onChanged(); toast.success('המשמרת נשמרה'); }}
         />
@@ -372,10 +433,10 @@ function LocationShifts({ siteId, location, onEdit, onChanged }) {
 /** הוספת משמרות מתבנית סוג המיקום. משמרת בשם שכבר קיים אינה נדרסת. */
 function TemplateCopy({ endpoint, location, onClose, onDone }) {
   const toast = useToast();
-  const [period, setPeriod] = useState('training');
+  const [period, setPeriod] = useState('');
 
   const copy = useAction(
-    async () => onDone(await post(endpoint, { period })),
+    async () => onDone(await post(endpoint, period ? { period } : {})),
     { onError: (err) => toast.error(err) },
   );
 
@@ -393,12 +454,13 @@ function TemplateCopy({ endpoint, location, onClose, onDone }) {
       }
     >
       <p className="small" style={{ marginBlockEnd: 'var(--space-3)' }}>
-        יתווספו המשמרות שמוגדרות לסוג המיקום ״{location.location_type_name}״ בתקופה שתבחרו.
-        משמרת שכבר קיימת במיקום באותו שם לא תשתנה.
+        יתווספו המשמרות שמוגדרות במאגר המיקומים ל״{location.location_type_name}״, כל אחת מתויגת
+        בשלב שלה. משמרת שכבר קיימת במיקום באותו שם ובאותו שלב לא תשתנה.
       </p>
-      <Field label="תקופה">
+      <Field label="שלב">
         {(props) => (
           <select {...props} value={period} onChange={(e) => setPeriod(e.target.value)}>
+            <option value="">כל השלבים</option>
             {PERIODS.map((p) => (
               <option key={p.value} value={p.value}>{p.label}</option>
             ))}
@@ -472,14 +534,14 @@ function SiteForm({ site, onClose, onSaved }) {
           {(props) => (
             <select {...props} value={form.statusCode} onChange={(e) => setForm({ ...form, statusCode: e.target.value })}>
               <option value="training">הכשרה</option>
-              <option value="golive">Go Live</option>
-              <option value="support">תמיכה</option>
+              <option value="golive">עלייה לאוויר</option>
+              <option value="support">ליווי</option>
               <option value="ended">הסתיים</option>
             </select>
           )}
         </Field>
 
-        <Field label="תאריך Go Live">
+        <Field label="תאריך עלייה לאוויר" hint="עד התאריך הזה האתר בהכשרה, ומהתאריך — המיקומים והשעות של העלייה לאוויר">
           {(props) => (
             <input {...props} type="date" value={form.goLiveDate} onChange={(e) => setForm({ ...form, goLiveDate: e.target.value })} />
           )}
@@ -548,7 +610,7 @@ function SiteForm({ site, onClose, onSaved }) {
   );
 }
 
-function ShiftForm({ endpoint, locationName, shift, onClose, onSaved }) {
+function ShiftForm({ endpoint, locationName, shift, defaultPeriod, periods, onClose, onSaved }) {
   const toast = useToast();
   const domains = useApi('/api/settings/domains');
 
@@ -559,13 +621,21 @@ function ShiftForm({ endpoint, locationName, shift, onClose, onSaved }) {
     isMandatory: shift?.is_mandatory ?? false,
     requiredStaff: shift?.required_staff ?? 1,
     domainId: shift?.domain_id ?? '',
+    category: shift?.category ?? '',
+    period: shift ? (shift.period ?? '') : (defaultPeriod ?? ''),
   });
 
   const save = useAction(
     async () => {
       await post(
         endpoint,
-        { ...form, id: shift?.id, domainId: form.domainId || null },
+        {
+          ...form,
+          id: shift?.id,
+          domainId: form.domainId || null,
+          category: form.category || categoryFor(form.startTime),
+          period: form.period || null,
+        },
         { ifMatch: shift?.row_version },
       );
       onSaved();
@@ -606,6 +676,27 @@ function ShiftForm({ endpoint, locationName, shift, onClose, onSaved }) {
           {(props) => (
             <input {...props} type="time" value={form.endTime}
               onChange={(e) => setForm({ ...form, endTime: e.target.value })} />
+          )}
+        </Field>
+      </div>
+
+      <div className="grid grid-2">
+        <Field label="סוג משמרת" hint="נספר בכלל מינימום המשמרות בהגשת זמינות">
+          {(props) => (
+            <select {...props} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+              <option value="">אוטומטי ({CATEGORY_NAME[categoryFor(form.startTime)]})</option>
+              {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+          )}
+        </Field>
+        <Field label="שלב" hint="משמרת של שלב מסוים מתחלפת לבד בתאריך העלייה לאוויר">
+          {(props) => (
+            <select {...props} value={form.period} onChange={(e) => setForm({ ...form, period: e.target.value })}>
+              <option value="">כל השלבים</option>
+              {PERIODS.filter((p) => (periods ?? []).includes(p.value)).map((p) => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
+            </select>
           )}
         </Field>
       </div>
@@ -652,22 +743,36 @@ function ShiftForm({ endpoint, locationName, shift, onClose, onSaved }) {
   );
 }
 
+/**
+ * מיקום באתר. השם נבחר ממאגר המיקומים (כל מיקום שהוקם פעם נשמר בו),
+ * ואפשר גם להקליד שם חדש — הוא יישמר במאגר לפעם הבאה.
+ */
 function LocationForm({ siteId, location, onClose, onSaved }) {
   const toast = useToast();
   const types = useApi('/api/settings/location-types');
+  const catalog = (types.data?.locationTypes ?? []).filter((t) => t.is_active !== false);
 
   const [form, setForm] = useState({
     name: location?.name ?? '',
     description: location?.description ?? '',
-    locationTypeId: location?.location_type_id ?? '',
     isActive: location?.is_active ?? true,
+    periods: location?.periods ?? ['training', 'golive', 'support'],
   });
+
+  const match = useMemo(
+    () => catalog.find((t) => t.name.trim() === form.name.trim()),
+    [catalog, form.name],
+  );
 
   const save = useAction(
     async () => {
       const result = await post(
         `/api/sites/${siteId}/locations`,
-        { ...form, id: location?.id, locationTypeId: form.locationTypeId || null },
+        {
+          ...form,
+          id: location?.id,
+          locationTypeId: location ? (location.location_type_id ?? match?.id ?? null) : (match?.id ?? null),
+        },
         { ifMatch: location?.row_version },
       );
       onSaved(result.location);
@@ -675,41 +780,62 @@ function LocationForm({ siteId, location, onClose, onSaved }) {
     { onError: (err) => toast.error(err) },
   );
 
+  const togglePeriod = (p) =>
+    setForm((f) => ({
+      ...f,
+      periods: f.periods.includes(p) ? f.periods.filter((x) => x !== p) : [...f.periods, p],
+    }));
+
   return (
     <Modal
       title={location ? `עריכת ${location.name}` : 'מיקום חדש'}
       onClose={onClose}
       footer={
         <>
-          <button type="button" className="btn btn-primary" onClick={() => save.run()} disabled={save.busy}>
+          <button type="button" className="btn btn-primary" onClick={() => save.run()}
+            disabled={save.busy || !form.name.trim() || form.periods.length === 0}>
             {save.busy ? 'שומר…' : 'שמירה'}
           </button>
           <button type="button" className="btn" onClick={onClose}>ביטול</button>
         </>
       }
     >
-      <Field label="שם המיקום" required error={save.fieldErrors.name}>
-        {(props) => (
-          <input {...props} type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        )}
-      </Field>
-
       <Field
-        label="סוג המיקום"
+        label="שם המיקום"
+        required
+        error={save.fieldErrors.name}
         hint={
           location
-            ? 'שינוי הסוג אינו משנה את המשמרות הקיימות. אפשר להוסיף מהתבנית בכפתור ״העתקה מתבנית״.'
-            : 'מיקום חדש מקבל את המשמרות מהתבנית של הסוג, לפי התקופה הנוכחית באתר. אפשר לערוך אותן אחר כך.'
+            ? undefined
+            : match
+              ? `נמצא במאגר המיקומים — המשמרות שהוגדרו לו יועתקו לכל שלב`
+              : form.name.trim()
+                ? 'מיקום חדש — יישמר במאגר המיקומים, ויופיע ברשימה בפעם הבאה'
+                : 'בחרו מהרשימה או הקלידו שם חדש'
         }
       >
         {(props) => (
-          <select {...props} value={form.locationTypeId}
-            onChange={(e) => setForm({ ...form, locationTypeId: e.target.value })}>
-            <option value="">ללא סוג מוגדר</option>
-            {(types.data?.locationTypes ?? []).map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
+          <>
+            <input {...props} type="text" list={`catalog-${siteId}`} value={form.name}
+              autoComplete="off"
+              onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <datalist id={`catalog-${siteId}`}>
+              {catalog.map((t) => <option key={t.id} value={t.name} />)}
+            </datalist>
+          </>
+        )}
+      </Field>
+
+      <Field label="פעיל בשלבים" hint="למשל כיתת הדרכה — רק בהכשרה. המיקום יוצג בסידור ובזמינות רק בתאריכים של השלבים שנבחרו">
+        {() => (
+          <div className="row" style={{ gap: 6 }}>
+            {PERIODS.map((p) => (
+              <button key={p.value} type="button" className="chip"
+                aria-pressed={form.periods.includes(p.value)} onClick={() => togglePeriod(p.value)}>
+                {p.label}
+              </button>
             ))}
-          </select>
+          </div>
         )}
       </Field>
 
@@ -725,6 +851,211 @@ function LocationForm({ siteId, location, onClose, onSaved }) {
           onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
         מיקום פעיל
       </label>
+    </Modal>
+  );
+}
+
+/**
+ * מועדי השלבים של האתר. בלי הגדרה כאן — השלב נגזר מתאריך העלייה לאוויר:
+ * לפניו הכשרה, ממנו והלאה עלייה לאוויר.
+ */
+function PhasesEditor({ siteId, site, periods, onSaved }) {
+  const toast = useToast();
+  const initial = Object.fromEntries(
+    PERIODS.map((p) => {
+      const row = periods.find((x) => x.period === p.value);
+      return [p.value, { startsOn: row?.starts_on ?? '', endsOn: row?.ends_on ?? '' }];
+    }),
+  );
+  const [form, setForm] = useState(initial);
+  const [open, setOpen] = useState(false);
+
+  const save = useAction(
+    async () => {
+      const list = PERIODS
+        .map((p) => ({ period: p.value, ...form[p.value] }))
+        .filter((p) => p.startsOn && p.endsOn);
+      await put(`/api/sites/${siteId}/periods`, { periods: list });
+      toast.success('מועדי השלבים נשמרו');
+      setOpen(false);
+      onSaved();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const summary = periods.length
+    ? periods.map((p) => `${PERIOD_NAME[p.period]} מ־${fmtDateFull(p.starts_on)} עד ${fmtDateFull(p.ends_on)}`).join(' · ')
+    : site.go_live_date
+      ? `הכשרה עד ${fmtDateFull(site.go_live_date)}, ומשם עלייה לאוויר`
+      : 'לא הוגדרו מועדים — האתר נחשב בשלב לפי הסטטוס שלו';
+
+  return (
+    <Panel
+      title="שלבי האתר"
+      subtitle={summary}
+      actions={
+        <button type="button" className="btn btn-sm" onClick={() => setOpen((v) => !v)}>
+          {open ? 'סגירה' : 'עריכת מועדים'}
+        </button>
+      }
+    >
+      {open ? (
+        <>
+          {PERIODS.map((p) => (
+            <div key={p.value} className="grid grid-3" style={{ alignItems: 'end' }}>
+              <div className="field"><span className={`phase phase-${p.value}`}>{p.label}</span></div>
+              <Field label="מתאריך">
+                {(props) => (
+                  <input {...props} type="date" value={form[p.value].startsOn}
+                    onChange={(e) => setForm({ ...form, [p.value]: { ...form[p.value], startsOn: e.target.value } })} />
+                )}
+              </Field>
+              <Field label="עד תאריך">
+                {(props) => (
+                  <input {...props} type="date" value={form[p.value].endsOn}
+                    onChange={(e) => setForm({ ...form, [p.value]: { ...form[p.value], endsOn: e.target.value } })} />
+                )}
+              </Field>
+            </div>
+          ))}
+          <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>
+            שלב בלי שני תאריכים אינו נשמר. תאריך שאינו בשום שלב נקבע לפי תאריך העלייה לאוויר.
+          </p>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => save.run()} disabled={save.busy}>
+            {save.busy ? 'שומר…' : 'שמירת מועדים'}
+          </button>
+        </>
+      ) : (
+        <p className="small muted">
+          המיקומים והשעות בסידור ובהגשת הזמינות מתחלפים לבד לפי השלב של כל יום.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
+/** העתקת שעות משמרת מתחום לתחום — באותו אתר או לאתר אחר */
+function CopyDomainShifts({ siteId, locations, onClose, onDone }) {
+  const toast = useToast();
+  const domains = useApi('/api/settings/domains');
+  const sites = useApi('/api/sites');
+  const [form, setForm] = useState({
+    fromDomainId: '', toDomainId: '', targetSiteId: siteId, locationIds: [], period: '', mode: 'merge',
+  });
+
+  const domainList = domains.data?.domains ?? [];
+  const sourceCount = locations
+    .filter((l) => !form.locationIds.length || form.locationIds.includes(l.id))
+    .flatMap((l) => l.shiftTypes)
+    .filter((s) => s.domain_id === form.fromDomainId && (!form.period || s.period === form.period)).length;
+
+  const copy = useAction(
+    async () =>
+      onDone(await post(`/api/sites/${siteId}/shift-types/copy-domain`, {
+        fromDomainId: form.fromDomainId,
+        toDomainId: form.toDomainId,
+        targetSiteId: form.targetSiteId === siteId ? null : form.targetSiteId,
+        locationIds: form.locationIds.length ? form.locationIds : null,
+        period: form.period || null,
+        mode: form.mode,
+      })),
+    { onError: (err) => toast.error(err) },
+  );
+
+  const ready = form.fromDomainId && form.toDomainId &&
+    (form.fromDomainId !== form.toDomainId || form.targetSiteId !== siteId) && sourceCount > 0;
+
+  return (
+    <Modal
+      title="העתקת שעות משמרת מתחום לתחום"
+      onClose={onClose}
+      width={600}
+      footer={
+        <>
+          <button type="button" className="btn btn-primary" onClick={() => copy.run()} disabled={!ready || copy.busy}>
+            {copy.busy ? 'מעתיק…' : `העתקת ${sourceCount} משמרות`}
+          </button>
+          <button type="button" className="btn" onClick={onClose}>ביטול</button>
+        </>
+      }
+    >
+      <StateView loading={domains.loading} error={domains.error} onRetry={domains.reload}>
+        <div className="grid grid-2">
+          <Field label="מתחום" required>
+            {(props) => (
+              <select {...props} value={form.fromDomainId} onChange={(e) => setForm({ ...form, fromDomainId: e.target.value })}>
+                <option value="">בחירה</option>
+                {domainList.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            )}
+          </Field>
+          <Field label="לתחום" required>
+            {(props) => (
+              <select {...props} value={form.toDomainId} onChange={(e) => setForm({ ...form, toDomainId: e.target.value })}>
+                <option value="">בחירה</option>
+                {domainList.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            )}
+          </Field>
+        </div>
+
+        <div className="grid grid-2">
+          <Field label="לאתר" hint="באתר אחר — למיקום באותו שם">
+            {(props) => (
+              <select {...props} value={form.targetSiteId} onChange={(e) => setForm({ ...form, targetSiteId: e.target.value })}>
+                {(sites.data?.sites ?? []).map((s) => (
+                  <option key={s.id} value={s.id}>{s.id === siteId ? `${s.name} (האתר הזה)` : s.name}</option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field label="שלב">
+            {(props) => (
+              <select {...props} value={form.period} onChange={(e) => setForm({ ...form, period: e.target.value })}>
+                <option value="">כל השלבים</option>
+                {PERIODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            )}
+          </Field>
+        </div>
+
+        <Field label="מיקומים" hint="בלי בחירה — כל המיקומים">
+          {() => (
+            <div className="row" style={{ gap: 6 }}>
+              {locations.map((l) => {
+                const on = form.locationIds.includes(l.id);
+                return (
+                  <button key={l.id} type="button" className="chip" aria-pressed={on}
+                    onClick={() => setForm({
+                      ...form,
+                      locationIds: on ? form.locationIds.filter((x) => x !== l.id) : [...form.locationIds, l.id],
+                    })}>
+                    {l.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Field>
+
+        <Field label="אם לתחום היעד כבר יש משמרות">
+          {() => (
+            <Segmented
+              label="מצב העתקה"
+              value={form.mode}
+              onChange={(mode) => setForm({ ...form, mode })}
+              options={[
+                { value: 'merge', label: 'להוסיף רק מה שחסר' },
+                { value: 'replace', label: 'להחליף את הקיימות' },
+              ]}
+            />
+          )}
+        </Field>
+
+        {form.fromDomainId && sourceCount === 0 && (
+          <Notice tone="warn" icon="⚠">לתחום המקור אין משמרות לפי הבחירה. משמרת מתויגת בתחום בטופס המשמרת.</Notice>
+        )}
+      </StateView>
     </Modal>
   );
 }

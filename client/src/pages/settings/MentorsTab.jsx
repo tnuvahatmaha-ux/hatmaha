@@ -37,7 +37,7 @@ export default function MentorsTab() {
               .filter((i) => i.missing_mentor)
               .map((i) => <Tag key={i.user_id}>{i.full_name}</Tag>)}
           </div>
-          <div className="small mt-3">שיוך מדריך נעשה מכרטיס המטמיע במסך "מטמיעים".</div>
+          <div className="small mt-3">שיוך מדריך נעשה מכרטיס המטמיע במסך "אנשים".</div>
         </Notice>
       )}
 
@@ -64,7 +64,7 @@ export default function MentorsTab() {
           emptyProps={{
             icon: '🎓',
             title: 'עדיין אין מדריכים',
-            text: 'כדי להוסיף מדריך, שלח/י הזמנה עם תפקיד "מדריך" במסך המטמיעים.',
+            text: 'כדי להגדיר מדריך: במסך "אנשים" פותחים את האדם ומשנים את התפקיד שלו ל"מדריך".',
           }}
         >
           {(mentors.data?.mentors ?? []).map((mentor) => (
@@ -139,7 +139,7 @@ export default function MentorsTab() {
   );
 }
 
-function ResponsibilityForm({ mentor, onClose, onSaved }) {
+export function ResponsibilityForm({ mentor, onClose, onSaved }) {
   const toast = useToast();
   const sites = useApi('/api/sites');
   const domains = useApi('/api/settings/domains');

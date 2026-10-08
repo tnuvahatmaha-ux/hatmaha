@@ -119,6 +119,9 @@ function AvailabilityTab() {
 
   const willNeedApproval = overCannot || overPreferNot || mandatoryCannot.length > 0;
 
+  /** משמרות "זמין" לפי סוג — אותה ספירה שהשרת עושה בבדיקת המינימום */
+  const available = useMemo(() => countAvailable(win?.windows ?? [], cells), [win, cells]);
+
   /** לחיצה מחליפה בין יכול → מעדיף שלא → לא יכול → יכול */
   const cycle = (date, windowKeyValue) => {
     if (readOnly) return;
@@ -133,6 +136,11 @@ function AvailabilityTab() {
   const toCellArray = () =>
     Object.entries(cells)
       .filter(([, value]) => value !== 'can')
+      .filter(([key]) => {
+        const [date, range] = key.split('|');
+        const w = win.windows.find((x) => x.key === range);
+        return w && activeOn(w, date);
+      })
       .map(([key, value]) => {
         const [date, range] = key.split('|');
         const [startTime, endTime] = range.split('-');
@@ -254,8 +262,11 @@ function AvailabilityTab() {
             </Notice>
           )}
 
+          {win.minimums && <QuotaBar minimums={win.minimums} available={available} />}
+
           <AvailabilityGrid
             days={win.days}
+            phases={win.phases ?? {}}
             windows={win.windows}
             cells={cells}
             onCycle={cycle}
@@ -379,7 +390,43 @@ function AvailabilityTab() {
   );
 }
 
-function AvailabilityGrid({ days, windows, cells, onCycle, readOnly }) {
+const CATEGORY_NAMES = { morning: 'בוקר', afternoon: 'צהריים', night: 'לילה', weekend: 'סוף שבוע' };
+const PHASE_NAMES = { training: 'הכשרה', golive: 'עלייה לאוויר', support: 'ליווי' };
+const isWeekend = (date) => [5, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay());
+const activeOn = (w, date) => !w.days || w.days.includes(date);
+
+function countAvailable(windows, cells) {
+  const out = { morning: 0, afternoon: 0, night: 0, weekend: 0 };
+  for (const w of windows) {
+    for (const day of w.days ?? []) {
+      if ((cells[`${day}|${w.key}`] ?? 'can') !== 'can') continue;
+      if (w.category in out) out[w.category] += 1;
+      if (isWeekend(day)) out.weekend += 1;
+    }
+  }
+  return out;
+}
+
+/** המינימום שהמנהל הגדיר לכל סוג משמרת, מול מה שסומן "זמין" */
+function QuotaBar({ minimums, available }) {
+  const keys = Object.keys(CATEGORY_NAMES).filter((k) => minimums[k] > 0);
+  if (!keys.length) return null;
+  return (
+    <div className="quota-bar" aria-label="מינימום משמרות זמינות">
+      {keys.map((k) => {
+        const ok = available[k] >= minimums[k];
+        return (
+          <span key={k} className={`quota ${ok ? 'ok' : 'short'}`}>
+            {CATEGORY_NAMES[k]}
+            <strong>{available[k]}/{minimums[k]}</strong>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function AvailabilityGrid({ days, phases, windows, cells, onCycle, readOnly }) {
   return (
     <div
       className="avail-grid"
@@ -395,24 +442,36 @@ function AvailabilityGrid({ days, windows, cells, onCycle, readOnly }) {
             {w.isMandatory && <span className="mandatory-dot" title="כולל משמרת חובה" />}
           </span>
           <small>{w.label}</small>
+          {w.category && <small>{CATEGORY_NAMES[w.category]}</small>}
         </div>
       ))}
 
       {days.map((date) => (
-        <Row key={date} date={date} windows={windows} cells={cells} onCycle={onCycle} readOnly={readOnly} />
+        <Row key={date} date={date} phase={phases[date]} showPhase={new Set(Object.values(phases)).size > 1}
+          windows={windows} cells={cells} onCycle={onCycle} readOnly={readOnly} />
       ))}
     </div>
   );
 }
 
-function Row({ date, windows, cells, onCycle, readOnly }) {
+function Row({ date, phase, showPhase, windows, cells, onCycle, readOnly }) {
   return (
     <>
       <div className="avail-day" role="rowheader">
         {dayName(date)}
         <small className="tnum">{fmtDate(date)}</small>
+        {showPhase && phase && <span className={`phase phase-${phase}`}>{PHASE_NAMES[phase]}</span>}
       </div>
       {windows.map((w) => {
+        // המשמרת לא קיימת ביום הזה (למשל שעות הכשרה אחרי העלייה לאוויר)
+        if (!activeOn(w, date)) {
+          return (
+            <button key={w.key} type="button" className="avail-cell" disabled
+              aria-label={`${dayName(date)} ${fmtDate(date)}, ${w.startTime}–${w.endTime}: אין משמרת ביום הזה`}>
+              <span aria-hidden="true">—</span>
+            </button>
+          );
+        }
         const value = cells[`${date}|${w.key}`] ?? 'can';
         const meta = AVAIL_VALUES[value];
         return (
@@ -641,6 +700,9 @@ function ConstraintForm({ onClose, onSaved }) {
     { onError: (err) => toast.error(err) },
   );
 
+  // בלי סוג בקשה אין מה לבדוק או לשלוח — הכפתורים נעולים עד שהטופס נטען
+  const notReady = types.loading || !!types.error || !form.constraintTypeId;
+
   const willBeLabel = {
     approved: ['ok', '✓', 'הבקשה תאושר אוטומטית לפי מדיניות האתר'],
     pending_manager: ['warn', '⏳', 'הבקשה תועבר להחלטת מנהל'],
@@ -658,11 +720,11 @@ function ConstraintForm({ onClose, onSaved }) {
             type="button"
             className="btn btn-primary"
             onClick={() => submit.run()}
-            disabled={submit.busy || check.busy || preview?.willBe === 'blocked'}
+            disabled={notReady || submit.busy || check.busy || preview?.willBe === 'blocked'}
           >
             {submit.busy ? 'שולח…' : 'שליחה'}
           </button>
-          <button type="button" className="btn" onClick={() => check.run()} disabled={check.busy || submit.busy}>
+          <button type="button" className="btn" onClick={() => check.run()} disabled={notReady || check.busy || submit.busy}>
             {check.busy ? 'בודק…' : 'בדיקה'}
           </button>
           <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>

@@ -15,6 +15,7 @@ import { scheduleRouter } from './schedule.js';
 import { reportsRouter } from './reports.js';
 import { notificationsRouter } from './notifications.js';
 import { auditRouter } from './audit.js';
+import { updatesRouter } from './updates.js';
 
 /**
  * טבלת ההרכבה, כדאטה.
@@ -42,6 +43,7 @@ export const API_ROUTES = [
   ['/schedule', scheduleRouter],
   ['/reports', reportsRouter],
   ['/notifications', notificationsRouter],
+  ['/updates', updatesRouter],
   ['/audit', auditRouter],
 ];
 

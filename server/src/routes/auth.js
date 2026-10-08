@@ -75,6 +75,8 @@ authRouter.get('/me', async (req, res) => {
     subCategories,
     mentors,
     missingAssignments: missing,
+    // מנהל הטמעה אינו משובץ במשמרות, ולכן אינו מגיש זמינות או אילוצים לעצמו
+    submitsAvailability: profile.base_role !== 'manager',
     scopes: req.user.scopes,
     trainingStatus,
   });

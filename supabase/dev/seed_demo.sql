@@ -119,7 +119,8 @@ begin
 
   insert into locations (site_id, name, description) values (s_north, 'מחלקה פנימית א׳', 'קומה 3') returning id into l_ward;
   insert into locations (site_id, name, description) values (s_north, 'חדר מיון', 'קומת קרקע') returning id into l_er;
-  insert into locations (site_id, name, description) values (s_north, 'חדר הדרכה', 'אגף הדרכה') returning id into l_train;
+  -- חדר ההדרכה קיים רק בתקופת ההכשרה
+  insert into locations (site_id, name, description, periods) values (s_north, 'חדר הדרכה', 'אגף הדרכה', '{training}') returning id into l_train;
   insert into locations (site_id, name, description) values (s_center, 'אגף מנהלה', null) returning id into l_admin;
 
   -- ── משמרות — לכל מיקום השעות שלו ──
@@ -340,6 +341,27 @@ begin
     (u_noa, 'request_decided', 'הבקשה אושרה', 'חופשה — מאושר, בהצלחה', 'sent'),
     (u_michal, 'exception_raised', 'חריגה ממתינה לאישורך', 'בקשת חופשה של עומר דהן — הודעה מוקדמת קצרה', 'sent'),
     (u_mgr, 'request_submitted', 'הגשת זמינות שחורגת מהכללים', 'איתי מזרחי סימן "לא יכול" במשמרות חובה', 'sent');
+
+  -- ── מאגר המיקומים: כל מיקום שהוקם נשמר בו (כמו שהשרת עושה בהקמת מיקום) ──
+  insert into location_types (name)
+  select distinct l.name from locations l
+   where l.location_type_id is null
+     and not exists (select 1 from location_types lt where lt.name = l.name)
+  on conflict do nothing;
+  update locations l set location_type_id = lt.id
+    from location_types lt
+   where l.location_type_id is null and lt.name = l.name;
+  insert into location_type_profiles (location_type_id, period)
+  select lt.id, p.period from location_types lt
+   cross join (values ('training'::period_code), ('golive'::period_code)) as p(period)
+  on conflict do nothing;
+
+  -- ── מינימום משמרות זמינות בהגשה (אזהרה בלבד, כדי שהדמו יראה את הפס) ──
+  insert into rules (name, trigger, applies_to, condition_type_code, condition_params,
+                     severity, priority, message_he, scope_type, description)
+  values ('מינימום משמרות בשבוע', 'submit', 'availability', 'minShiftsPerCategory',
+          '{"morning": 4, "afternoon": 4, "night": 2, "weekend": 1}'::jsonb, 'warning', 20,
+          'לא סומנו מספיק משמרות זמינות', 'global', 'דוגמה — ניתן לשנות ב: הגדרות ← חוקיות');
 
   raise notice 'נתוני הדמו נטענו: 8 משתמשים, 2 אתרים, סידור שפורסם וטיוטה, בקשות וחריגה בתור';
 end $$;

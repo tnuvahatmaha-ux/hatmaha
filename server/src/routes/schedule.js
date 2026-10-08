@@ -102,10 +102,22 @@ scheduleRouter.get(
   '/team',
   requirePermission('teamSchedule', 'view', (req) => ({ siteId: req.query.siteId })),
   validate({
-    query: z.object({ siteId: uuid, date: dateStr, domainId: uuid.optional() }),
+    query: z
+      .object({
+        siteId: uuid,
+        date: dateStr.optional(),
+        from: dateStr.optional(),
+        to: dateStr.optional(),
+        domainId: uuid.optional(),
+        // מדריך: רק המטמיעים שמשויכים אליו
+        mine: z.enum(['1', '0', 'true', 'false']).optional().transform((v) => v === '1' || v === 'true'),
+      })
+      .refine((v) => v.date || (v.from && v.to), { message: 'יש לבחור תאריך או טווח', path: ['date'] }),
   }),
   async (req, res) => {
-    const { siteId, date, domainId } = req.validQuery;
+    const { siteId, domainId, mine } = req.validQuery;
+    const from = req.validQuery.from ?? req.validQuery.date;
+    const to = req.validQuery.to ?? req.validQuery.date;
 
     const [setting] = await query(
       `select value from app_settings where key = 'team_schedule_fields'`,
@@ -113,17 +125,20 @@ scheduleRouter.get(
     const allowed = new Set(setting?.value ?? ['name', 'activity', 'site', 'status']);
 
     const rows = await query(
-      `select person_name, activity_name, location_name, site_id, domain_name,
-              starts_at, ends_at, status_he, kind
+      `select entry_date::text as entry_date, person_name, activity_name, location_name,
+              site_id, domain_name, starts_at, ends_at, status_he, kind
          from v_team_schedule
-        where site_id = $1 and entry_date = $2
-          and ($3::uuid is null or domain_id = $3)
-        order by starts_at, person_name`,
-      [siteId, date, domainId ?? null],
+        where site_id = $1 and entry_date between $2::date and $3::date
+          and $3::date - $2::date <= 31
+          and ($4::uuid is null or domain_id = $4)
+          and (not $5 or user_id = any($6::uuid[]))
+        order by entry_date, starts_at, person_name`,
+      [siteId, from, to, domainId ?? null, mine, req.user.scopes.assignedUserIds],
     );
 
     // רק השדות שהותרו יוצאים מהשרת — הסתרה בלקוח אינה מזעור מידע
     const entries = rows.map((r) => ({
+      date: r.entry_date,
       ...(allowed.has('name') ? { name: r.person_name } : {}),
       ...(allowed.has('activity') ? { activity: r.activity_name } : {}),
       ...(allowed.has('site') ? { location: r.location_name } : {}),
@@ -135,7 +150,24 @@ scheduleRouter.get(
       kind: r.kind,
     }));
 
-    res.json({ date, fields: [...allowed], entries });
+    res.json({ date: from, from, to, fields: [...allowed], entries });
+  },
+);
+
+/** האתרים שאפשר לראות בהם לו״ז צוות — כולל אתרים שבאחריות המדריך */
+scheduleRouter.get(
+  '/team/sites',
+  requirePermission('teamSchedule', 'view'),
+  async (req, res) => {
+    const isManager = req.user.baseRole === 'manager';
+    const sites = await query(
+      `select s.id, s.name from sites s
+        where s.deleted_at is null and not s.is_archived
+          and ($1 or s.id = any($2::uuid[]))
+        order by s.name`,
+      [isManager, req.user.scopes.siteIds],
+    );
+    res.json({ sites });
   },
 );
 

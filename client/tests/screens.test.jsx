@@ -83,6 +83,12 @@ const RESPONSES = {
   '/api/activities/my-tasks': { tasks: [] },
   '/api/schedule/me': { items: [] },
   '/api/schedule/team': { date: '2026-11-15', fields: ['name'], entries: [] },
+  '/api/schedule/team/sites': { sites: [{ id: 's1', name: 'מרכז רפואי צפון' }] },
+  '/api/updates/inbox': { updates: [
+    { id: 'm1', title: 'נוהל חדש', body: 'נא לקרוא', requires_ack: true, read_at: null, acknowledged_at: null, author_name: 'יוסי לוי', published_at: '2026-11-14T08:00:00Z', attachment_count: 1 },
+  ] },
+  '/api/updates/sent': { updates: [], storageEnabled: false },
+  '/api/updates/recipients': { recipients: [], storageEnabled: false },
   '/api/roster/versions': { versions: [] },
   '/api/roster/draft': { version: { id: 'v1', status: 'draft', version_number: 1, week_start: '2026-11-15', site_id: 's1', row_version: 1 } },
   '/api/notifications': { notifications: [], unread: 0, total: 0 },
@@ -166,7 +172,8 @@ const SCREENS = [
   ['פעילויות', () => import('../src/pages/Activities.jsx')],
   ['בונה סידור', () => import('../src/pages/Roster.jsx')],
   ['אתרים', () => import('../src/pages/Sites.jsx')],
-  ['מטמיעים', () => import('../src/pages/Implementers.jsx')],
+  ['אנשים', () => import('../src/pages/Implementers.jsx')],
+  ['הודעות', () => import('../src/pages/Messages.jsx')],
   ['דוחות', () => import('../src/pages/Reports.jsx')],
   ['התראות', () => import('../src/pages/Notifications.jsx')],
   ['פרופיל', () => import('../src/pages/Profile.jsx')],
@@ -295,5 +302,16 @@ describe('משמרות לפי מיקום ואישור בלחיצה', () => {
     expect(await screen.findByText('כללי אישור אילוצים')).toBeTruthy();
     const group = await screen.findByRole('group', { name: 'כלל האישור של מחלה' });
     expect(group.querySelector('[aria-pressed="true"]').textContent).toBe('אישור אוטומטי');
+  });
+});
+
+describe('הודעות לצוות', () => {
+  afterEach(cleanup);
+
+  it('הודעה שמחכה לאישור קריאה מסומנת בתיבה', async () => {
+    const { default: Messages } = await import('../src/pages/Messages.jsx');
+    renderScreen(Messages);
+    expect(await screen.findByText('נוהל חדש')).toBeTruthy();
+    expect(screen.getByText('ממתין לאישור קריאה')).toBeTruthy();
   });
 });

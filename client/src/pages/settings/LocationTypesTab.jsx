@@ -8,12 +8,13 @@ import { fmtClock, DAY_NAMES } from '../../lib/format.js';
 const PERIODS = [
   { value: 'training', label: 'הכשרה' },
   { value: 'golive', label: 'עלייה לאוויר' },
-  { value: 'support', label: 'תמיכה' },
+  { value: 'support', label: 'ליווי' },
 ];
 
 /**
- * סוגי מיקום ופרופילים לפי תקופה.
- * לכל סוג מיקום מוגדרים ימי פעילות, שעות ותבניות משמרת — בנפרד לכל תקופה.
+ * מאגר המיקומים — כל מיקום שהוקם באתר כלשהו נשמר כאן, ומופיע ברשימה
+ * בפעם הבאה שמקימים אתר. לכל מיקום מוגדרים ימי פעילות, שעות ותבניות
+ * משמרת — בנפרד לתקופת ההכשרה ולתקופת העלייה לאוויר.
  */
 export default function LocationTypesTab() {
   const toast = useToast();
@@ -26,15 +27,15 @@ export default function LocationTypesTab() {
       await post('/api/settings/location-types', { name: name.trim() });
       setName('');
       types.reload();
-      toast.success('סוג המיקום נוסף');
+      toast.success('המיקום נוסף למאגר');
     },
     { onError: (err) => toast.error(err) },
   );
 
   return (
     <Panel
-      title="סוגי מיקום"
-      subtitle="שעות הפעילות ותבניות המשמרת מוגדרות בנפרד לכל תקופה"
+      title="מאגר מיקומים"
+      subtitle="כל מיקום שהוקם נשמר כאן ומופיע ברשימה בהקמת אתר. השעות ותבניות המשמרת מוגדרות בנפרד להכשרה ולעלייה לאוויר"
       flush
     >
       <div className="panel-body">
@@ -43,8 +44,8 @@ export default function LocationTypesTab() {
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="סוג מיקום חדש — למשל: מחלקה פנימית"
-            aria-label="שם סוג המיקום"
+            placeholder="מיקום חדש — למשל: מחלקה פנימית"
+            aria-label="שם המיקום"
             style={{ maxWidth: 280 }}
           />
           <button type="submit" className="btn btn-primary btn-sm" disabled={add.busy || !name.trim()}>
@@ -58,7 +59,7 @@ export default function LocationTypesTab() {
         error={types.error}
         onRetry={types.reload}
         empty={!types.loading && (types.data?.locationTypes ?? []).length === 0}
-        emptyProps={{ icon: '🏗️', title: 'לא הוגדרו סוגי מיקום' }}
+        emptyProps={{ icon: '📍', title: 'המאגר ריק', text: 'מיקום שמוקם באתר נשמר כאן אוטומטית.' }}
       >
         {(types.data?.locationTypes ?? []).map((type) => (
           <LocationTypeCard key={type.id} type={type} onChanged={types.reload} />

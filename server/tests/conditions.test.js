@@ -19,8 +19,8 @@ const commitment = (date, from, to, extra = {}) => ({
 });
 
 describe('המרשם', () => {
-  it('מכיל בדיוק 14 סוגי תנאים', () => {
-    expect(conditionCodes).toHaveLength(14);
+  it('מכיל בדיוק 15 סוגי תנאים', () => {
+    expect(conditionCodes).toHaveLength(15);
   });
   it('כל תנאי חושף code ו-evaluate', () => {
     for (const [code, mod] of conditionRegistry) {
@@ -257,5 +257,23 @@ describe('minStaffCoverage', () => {
     expect(r.passed).toBe(false);
     expect(r.facts.gapCount).toBe(8);
     expect(r.detail).toContain('ועוד 3');
+  });
+});
+
+describe('minShiftsPerCategory', () => {
+  const counts = { morning: 4, afternoon: 2, night: 0, weekend: 1 };
+  it('עובר כשכל המינימומים מתקיימים', () => {
+    const r = run('minShiftsPerCategory', {}, { morning: 4, afternoon: 2, weekend: 1 }, { availabilityCounts: counts });
+    expect(r.passed).toBe(true);
+  });
+  it('נכשל ומפרט מה חסר', () => {
+    const r = run('minShiftsPerCategory', {}, { morning: 5, night: 1 }, { availabilityCounts: counts });
+    expect(r.passed).toBe(false);
+    expect(r.detail).toContain('בוקר 4/5');
+    expect(r.detail).toContain('לילה 0/1');
+  });
+  it('0 או חסר — לא נבדק', () => {
+    const r = run('minShiftsPerCategory', {}, { morning: 0 }, { availabilityCounts: counts });
+    expect(r.passed).toBe(true);
   });
 });

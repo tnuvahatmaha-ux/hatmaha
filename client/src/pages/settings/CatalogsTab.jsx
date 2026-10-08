@@ -153,7 +153,7 @@ function ApprovalRulesPanel() {
                     {!rule.is_active && <Tag> מושבת</Tag>}
                   </td>
                   <td data-label="כלל אישור">
-                    <div className="row" style={{ gap: 0 }} role="group" aria-label={`כלל האישור של ${rule.name_he}`}>
+                    <div className="seg" role="group" aria-label={`כלל האישור של ${rule.name_he}`}>
                       {[
                         { value: 'auto', label: 'אישור אוטומטי' },
                         { value: 'manager', label: 'דורש אישור' },
@@ -161,11 +161,10 @@ function ApprovalRulesPanel() {
                         <button
                           key={option.value}
                           type="button"
-                          className={`btn btn-sm${rule.approval_mode === option.value ? ' btn-primary' : ''}`}
+                          className="seg-btn"
                           onClick={() => setMode.run(rule, option.value)}
                           disabled={!editable || setMode.busy}
                           aria-pressed={rule.approval_mode === option.value}
-                          style={{ marginInlineStart: -2 }}
                         >
                           {option.label}
                         </button>

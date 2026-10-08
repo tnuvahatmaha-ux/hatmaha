@@ -21,7 +21,7 @@ import SystemTab from './SystemTab.jsx';
 const TABS = [
   { id: 'domains', label: 'תחומים', need: ['domains', 'view'], Component: DomainsTab },
   { id: 'catalogs', label: 'סוגים וסטטוסים', need: ['settings', 'view'], Component: CatalogsTab },
-  { id: 'locationTypes', label: 'סוגי מיקום', need: ['settings', 'view'], Component: LocationTypesTab },
+  { id: 'locationTypes', label: 'מאגר מיקומים', need: ['settings', 'view'], Component: LocationTypesTab },
   { id: 'rules', label: 'חוקיות', need: ['rules', 'view'], Component: RulesTab },
   { id: 'mentors', label: 'ניהול מדריכים', need: ['mentors', 'view'], Component: MentorsTab },
   { id: 'permissions', label: 'הרשאות', need: ['permissions', 'view'], Component: PermissionsTab, managerOnly: true },
@@ -57,16 +57,16 @@ export default function Settings() {
         title="הגדרות"
         subtitle="ניהול תחומים, קטלוגים, חוקיות, מדריכים והרשאות — ללא שינוי קוד"
         actions={
-          <div className="row" style={{ gap: 0 }} role="tablist" aria-label="מסכי ההגדרות">
+          <div className="seg" role="tablist" aria-label="מסכי ההגדרות">
             {available.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 role="tab"
                 aria-selected={tab.id === active.id}
-                className={`btn btn-sm${tab.id === active.id ? ' btn-primary' : ''}`}
+                aria-pressed={tab.id === active.id}
+                className="seg-btn"
                 onClick={() => setParams({ tab: tab.id })}
-                style={{ marginInlineStart: -2 }}
               >
                 {tab.label}
               </button>

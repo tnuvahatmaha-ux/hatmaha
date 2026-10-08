@@ -1,7 +1,8 @@
 import { query, withTransaction } from '../lib/db.js';
 import { weekStartOf, weekDays, nextWeekStart, today, toInstants, deadlineForWeek } from '../lib/time.js';
 import { AppError } from '../lib/errors.js';
-import { evaluate } from '../rules/engine.js';
+import { evaluate, selectRules } from '../rules/engine.js';
+import { hhmm, windowKey, siteWindows, sitePhases, countAvailable } from './availabilityWindows.js';
 import { evaluateAndExecute } from '../rules/exceptions.js';
 import { registerAction } from '../rules/actions.js';
 import { notify } from '../notifications/service.js';
@@ -17,42 +18,37 @@ import { notify } from '../notifications/service.js';
  * הקודמת כמוחלפת, ולכן החלטת מנהל אינה נדרסת בשקט — הבאג שהיה בפרוטוטייפ.
  */
 
-/** 'HH:MM' מתוך ערך time של Postgres ('HH:MM:SS') */
-const hhmm = (t) => String(t ?? '').slice(0, 5);
+export { windowKey, siteWindows, countAvailable };
 
-/** מפתח יציב לחלון שעות — משותף לשרת וללקוח */
-export const windowKey = (start, end) => `${hhmm(start)}-${hhmm(end)}`;
+/** התחום הראשי של המשתמש — לחוקים שהוגדרו ברמת תחום */
+async function primaryDomain(run, userId) {
+  const [row] = await run(
+    `select domain_id from user_domains where user_id = $1 and deleted_at is null
+      order by is_primary desc limit 1`,
+    [userId],
+  );
+  return row?.domain_id ?? null;
+}
 
 /**
- * חלונות השעות הייחודיים באתר, מתוך המשמרות של המיקומים הפעילים בו.
- * חלון הוא "חובה" אם לפחות אחת מהמשמרות בו מסומנת חובה.
- *
- * @param {(sql: string, params: any[]) => Promise<any[]>} run  query או tx.query
+ * המינימום שחל על המשתמש בכל סוג משמרת, מכל חוקי minShiftsPerCategory
+ * הפעילים. כמה חוקים חלים יחד — המחמיר מנצח. null כשאין חוק כזה.
  */
-export async function siteWindows(run, siteId) {
-  const rows = await run(
-    `select st.start_time, st.end_time,
-            bool_or(st.is_mandatory)                         as is_mandatory,
-            bool_or(st.crosses_midnight)                     as crosses_midnight,
-            string_agg(distinct st.name, ' / ')              as shift_names,
-            string_agg(distinct l.name, ', ')                as location_names
-       from shift_types st
-       join locations l on l.id = st.location_id and l.deleted_at is null and l.is_active
-      where st.site_id = $1 and st.deleted_at is null and st.is_active
-      group by st.start_time, st.end_time
-      order by st.start_time, st.end_time`,
-    [siteId],
-  );
-
-  return rows.map((r) => ({
-    key: windowKey(r.start_time, r.end_time),
-    startTime: hhmm(r.start_time),
-    endTime: hhmm(r.end_time),
-    label: r.shift_names,
-    locations: r.location_names,
-    isMandatory: r.is_mandatory,
-    crossesMidnight: r.crosses_midnight,
-  }));
+async function minimumsFor(userId, siteId) {
+  const rules = await selectRules({ query }, {
+    trigger: 'submit',
+    subjectType: 'availability',
+    siteId,
+    domainId: await primaryDomain(query, userId),
+    targetUserId: userId,
+  });
+  const relevant = rules.filter((r) => r.condition_type_code === 'minShiftsPerCategory');
+  if (relevant.length === 0) return null;
+  const out = { morning: 0, afternoon: 0, night: 0, weekend: 0 };
+  for (const r of relevant) {
+    for (const k of Object.keys(out)) out[k] = Math.max(out[k], Number(r.condition_params?.[k]) || 0);
+  }
+  return out;
 }
 
 /** חלון ההגשה הנוכחי: איזה שבוע מוצהר, ועד מתי אפשר */
@@ -79,7 +75,9 @@ export async function window(principal, siteId) {
         )
       : null;
 
-  const windows = site ? await siteWindows(query, site) : [];
+  const [windows, phases] = site
+    ? await Promise.all([siteWindows(query, site, weekStart), sitePhases(query, site, weekStart)])
+    : [[], {}];
 
   return {
     siteId: site,
@@ -87,6 +85,8 @@ export async function window(principal, siteId) {
     weekStart,
     days: weekDays(weekStart),
     windows,
+    phases,
+    minimums: site ? await minimumsFor(principal.userId, site) : null,
     limits: {
       maxCannot: row?.availability_max_cannot ?? 3,
       maxPreferNot: row?.availability_max_prefer_not ?? 4,
@@ -268,7 +268,7 @@ async function loadForEvaluation(tx, declarationId) {
          from availability_cells where declaration_id = $1`,
       [declarationId],
     ),
-    siteWindows(tx.query, decl.site_id),
+    siteWindows(tx.query, decl.site_id, decl.week_start),
   ]);
 
   return { decl, cells, windows };
@@ -294,6 +294,7 @@ export async function preview(actor, declarationId) {
       subjectId: decl.id,
       targetUserId: decl.user_id,
       siteId: decl.site_id,
+      domainId: await primaryDomain(tx.query, decl.user_id),
       weekStart: decl.week_start,
       timeZone: decl.timezone,
     });
@@ -311,6 +312,7 @@ export async function preview(actor, declarationId) {
         cannot: cells.filter((c) => c.value === 'cannot').length,
         preferNot: cells.filter((c) => c.value === 'prefer_not').length,
       },
+      available: countAvailable({ cells, windows }),
       limits: {
         maxCannot: decl.availability_max_cannot,
         maxPreferNot: decl.availability_max_prefer_not,
@@ -361,6 +363,7 @@ export async function submit(actor, declarationId, meta) {
         subjectId: declarationId,
         targetUserId: decl.user_id,
         siteId: decl.site_id,
+        domainId: await primaryDomain(tx.query, decl.user_id),
         weekStart: decl.week_start,
         timeZone: decl.timezone,
         hasQuotaViolations: violations.length > 0,

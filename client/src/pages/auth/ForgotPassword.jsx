@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Field, Notice } from '../../components/ui/index.jsx';
+import { BrandMark } from '../../components/layout/Brand.jsx';
 
 export default function ForgotPassword() {
   const { requestPasswordReset } = useAuth();
@@ -28,9 +29,9 @@ export default function ForgotPassword() {
     <div className="auth-shell">
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="brand-mark" aria-hidden="true">הט</div>
+          <BrandMark />
           <div>
-            <h1 style={{ fontSize: 18 }}>איפוס סיסמה</h1>
+            <h1>איפוס סיסמה</h1>
             <p className="small muted">נשלח אליך קישור לאיפוס</p>
           </div>
         </div>

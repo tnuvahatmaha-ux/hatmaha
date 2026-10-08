@@ -7,6 +7,7 @@ import { withIdempotency } from '../lib/idempotency.js';
 import { uuid, dateStr, timeStr, sundayDate, idParam } from '../schemas/common.schema.js';
 import * as svc from '../services/availability.service.js';
 import { query } from '../lib/db.js';
+import { rejectManagerSelfSubmission } from '../middleware/rejectManagerSelfSubmission.js';
 
 export const availabilityRouter = Router();
 availabilityRouter.use(requireAuth);
@@ -85,6 +86,7 @@ availabilityRouter.put(
     siteId: req.body?.siteId,
   })),
   validate({ body: draftBody }),
+  rejectManagerSelfSubmission,
   async (req, res) => {
     const declarationId = await svc.saveDraft(req.user, req.body);
     res.json({ declarationId });

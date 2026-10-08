@@ -12,13 +12,24 @@ import { fmtTime, fmtDate, dayName, today, addDays, ROLE_NAMES, statusTone, STAT
  * המטלות והצוות. שיוך חסר מוצג בבירור בראש המסך, כפי ש-§7 דורש.
  */
 export default function Home() {
-  const { profile, role, sites, domains, mentors, missingAssignments, can } = usePermissions();
+  const { profile, role, sites, domains, mentors, missingAssignments, can, submitsAvailability } = usePermissions();
+  const approver = can('requests', 'approve');
 
   const from = today();
   const to = addDays(from, 7);
   const schedule = useApi('/api/schedule/me', { from, to });
   const tasks = useApi(role === 'mentor' ? '/api/activities/my-tasks' : null);
   const team = useApi(role === 'mentor' ? '/api/settings/mentors/my-team' : null);
+  const inbox = useApi('/api/updates/inbox');
+  const pendingRequests = useApi(approver ? '/api/requests' : null, { status: 'submitted', limit: 100 });
+  const pendingExceptions = useApi(approver ? '/api/exceptions' : null, { status: 'pending', limit: 100 });
+  const pendingAvailability = useApi(approver ? '/api/availability/pending' : null);
+
+  const awaitingAck = (inbox.data?.updates ?? []).filter((u) => u.requires_ack && !u.acknowledged_at);
+  const pendingCount =
+    (pendingRequests.data?.requests?.length ?? 0) +
+    (pendingExceptions.data?.exceptions?.length ?? 0) +
+    (pendingAvailability.data?.declarations?.length ?? 0);
 
   const items = schedule.data?.items ?? [];
   const todayItems = items.filter((i) => i.entry_date === from);
@@ -37,6 +48,15 @@ export default function Home() {
           <div className="small mt-3">
             בלי השיוכים האלה לא נוכל לשבץ אותך ולא תוכל/י להגיש זמינות.
             פנה/י למנהל ההטמעה.
+          </div>
+        </Notice>
+      )}
+
+      {awaitingAck.length > 0 && (
+        <Notice tone="warn" icon="💬" title={`${awaitingAck.length} הודעות ממתינות לאישור קריאה`}>
+          <div className="row">
+            <span>{awaitingAck.slice(0, 3).map((u) => u.title).join(' · ')}</span>
+            <Link to="/messages" className="btn btn-sm row-end">לקריאה ואישור</Link>
           </div>
         </Notice>
       )}
@@ -87,12 +107,18 @@ export default function Home() {
             </div>
 
             <dl style={{ margin: 0, display: 'grid', gap: 6, fontSize: 13 }}>
-              <Row label="אתר" value={sites.map((s) => s.name).join(', ') || '—'} />
-              <Row label="תחום" value={domains.map((d) => d.name).join(', ') || '—'} />
-              <Row
-                label="מדריך ראשי"
-                value={mentors.find((m) => m.isPrimary)?.name ?? '—'}
-              />
+              {submitsAvailability && (
+                <>
+                  <Row label="אתר" value={sites.map((s) => s.name).join(', ') || '—'} />
+                  <Row label="תחום" value={domains.map((d) => d.name).join(', ') || '—'} />
+                </>
+              )}
+              {['implementer', 'lead'].includes(role) && (
+                <Row
+                  label="מדריך ראשי"
+                  value={mentors.find((m) => m.isPrimary)?.name ?? '—'}
+                />
+              )}
               {profile?.training_status_name && (
                 <Row label="סטטוס הכשרה" value={profile.training_status_name} />
               )}
@@ -101,7 +127,17 @@ export default function Home() {
             <Link to="/profile" className="btn btn-sm mt-3">עריכת הפרופיל</Link>
           </Panel>
 
-          {can('availability', 'create') && (
+          {approver && (
+            <Panel title="ממתין לאישורך">
+              <div className="kpi-value" style={{ marginBlockEnd: 6 }}>{pendingCount}</div>
+              <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>
+                בקשות, חריגות והצהרות זמינות שמחכות להחלטה.
+              </p>
+              <Link to="/approvals" className="btn btn-sm">לבקשות ואישורים</Link>
+            </Panel>
+          )}
+
+          {submitsAvailability && can('availability', 'create') && (
             <Panel title="זמינות לשבוע הבא">
               <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>
                 סימון הזמינות שלך משפיע ישירות על השיבוץ.

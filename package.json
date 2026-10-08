@@ -1,7 +1,7 @@
 {
   "name": "hatmaha",
   "private": true,
-  "description": "מערכת לניהול צוות הטמעה — monorepo (client + server + supabase)",
+  "description": "המטמיעון — ניהול צוות הטמעה. monorepo (client + server + supabase)",
   "engines": {
     "node": ">=22"
   },

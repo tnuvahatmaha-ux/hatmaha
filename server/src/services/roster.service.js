@@ -106,15 +106,16 @@ export async function board(versionId) {
 
   const days = weekDays(version.week_start);
 
-  const [locations, shiftTypes, assignments, people, availability, constraints, declarations] = await Promise.all([
+  const [locations, shiftTypes, assignments, people, availability, constraints, declarations, phaseRows] = await Promise.all([
     query(
-      `select id, name, capacity from locations
+      `select id, name, capacity, periods::text[] as periods from locations
         where site_id = $1 and deleted_at is null and is_active order by name`,
       [version.site_id],
     ),
     query(
       `select id, location_id, name, start_time, end_time, is_mandatory, crosses_midnight,
-              required_staff, domain_id, sub_category_id, display_order
+              required_staff, domain_id, sub_category_id, display_order,
+              category::text as category, period::text as period
          from shift_types
         where site_id = $1 and deleted_at is null and is_active
         order by display_order, start_time`,
@@ -172,11 +173,18 @@ export async function board(versionId) {
           and superseded_at is null and deleted_at is null`,
       [version.site_id, version.week_start],
     ),
+    // שלב האתר בכל יום: המיקומים והמשמרות שמוצגים ביום תלויים בו
+    query(
+      `select d::date::text as day, app.site_period_on($1, d::date)::text as period
+         from generate_series($2::date, $2::date + 6, interval '1 day') d`,
+      [version.site_id, version.week_start],
+    ),
   ]);
 
   return {
     version,
     days,
+    phases: Object.fromEntries(phaseRows.map((r) => [r.day, r.period])),
     locations,
     shiftTypes,
     assignments,

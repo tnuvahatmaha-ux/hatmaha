@@ -22,9 +22,12 @@ const domainBody = z.object({
 
 const subCategoryBody = domainBody.extend({ domainId: uuid });
 
+// קטלוגים לקריאה בלבד פתוחים לכל משתמש מחובר: הם ממלאים טפסים (סוג אילוץ,
+// תחום, מיקום) של כל התפקידים. בלי זה, "בקשת חופשה או אילוץ" של מטמיע
+// נכשלה ב"אין לך הרשאה" עוד לפני שנפתחה. הכתיבה נשארת תחת הרשאות ניהול.
+
 settingsRouter.get(
   '/domains',
-  requirePermission('domains', 'view'),
   validate({ query: z.object({ includeInactive: z.coerce.boolean().default(false) }) }),
   async (req, res) => res.json({ domains: await svc.domainTree(req.validQuery) }),
 );
@@ -65,7 +68,6 @@ const lookupBody = z.object({
 
 settingsRouter.get(
   '/lookups/:kind',
-  requirePermission('settings', 'view'),
   validate({
     params: z.object({ kind: lookupKind }),
     query: z.object({ includeInactive: z.coerce.boolean().default(false) }),
@@ -109,7 +111,6 @@ settingsRouter.put(
 
 settingsRouter.get(
   '/location-types',
-  requirePermission('settings', 'view'),
   async (_req, res) => res.json({ locationTypes: await svc.locationTypes() }),
 );
 

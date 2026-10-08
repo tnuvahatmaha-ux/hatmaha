@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState, useId } from 'react';
+import { X, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { GlyphIcon } from './icons.jsx';
+
+export { GlyphIcon };
 
 /* ==========================================================================
    רכיבי בסיס
@@ -32,7 +36,7 @@ export function Tag({ tone = '', children, title }) {
 export function Notice({ tone = '', title, children, icon }) {
   return (
     <div className={`notice${tone ? ` notice-${tone}` : ''}`} role={tone === 'danger' ? 'alert' : 'status'}>
-      {icon && <span aria-hidden="true">{icon}</span>}
+      {icon && <span aria-hidden="true" style={{ display: 'flex', paddingBlockStart: 1 }}><GlyphIcon value={icon} size={17} /></span>}
       <div style={{ flex: 1 }}>
         {title && <div className="notice-title">{title}</div>}
         {children}
@@ -90,7 +94,7 @@ export function Loading({ text = 'טוען…' }) {
 export function Empty({ icon = '📭', title = 'אין כאן עדיין כלום', text, action }) {
   return (
     <div className="state">
-      <div className="state-icon" aria-hidden="true">{icon}</div>
+      <div className="state-icon" aria-hidden="true"><GlyphIcon value={icon} size={40} /></div>
       <div className="state-title">{title}</div>
       {text && <div className="state-text">{text}</div>}
       {action}
@@ -104,7 +108,9 @@ export function ErrorState({ error, onRetry }) {
 
   return (
     <div className="state">
-      <div className="state-icon" aria-hidden="true">{isForbidden ? '🔒' : isNetwork ? '📡' : '⚠️'}</div>
+      <div className="state-icon" aria-hidden="true">
+        <GlyphIcon value={isForbidden ? '🔒' : isNetwork ? '📡' : '⚠️'} size={40} />
+      </div>
       <div className="state-title">
         {isForbidden ? 'אין לך הרשאה' : isNetwork ? 'אין חיבור לשרת' : 'משהו השתבש'}
       </div>
@@ -122,7 +128,7 @@ export function ErrorState({ error, onRetry }) {
 export function Forbidden({ text = 'הפריט המבוקש נמצא מחוץ להרשאות שלך.' }) {
   return (
     <div className="state">
-      <div className="state-icon" aria-hidden="true">🔒</div>
+      <div className="state-icon" aria-hidden="true"><GlyphIcon value="🔒" size={40} /></div>
       <div className="state-title">אין לך הרשאה</div>
       <div className="state-text">{text}</div>
     </div>
@@ -210,8 +216,8 @@ export function Modal({ title, onClose, children, footer, width = 560 }) {
       >
         <div className="modal-head">
           <h2 id={titleId}>{title}</h2>
-          <button type="button" className="btn btn-ghost btn-icon" onClick={onClose} aria-label="סגירה">
-            ✕
+          <button type="button" className="btn btn-icon" onClick={onClose} aria-label="סגירה">
+            <X size={16} strokeWidth={2.4} />
           </button>
         </div>
         <div className="modal-body">{children}</div>
@@ -251,15 +257,14 @@ export function ConfirmDialog({ title, message, confirmLabel = 'אישור', ton
 /** מתגי בחירה — נגישים במקלדת, בשונה מ-div לחיץ */
 export function Segmented({ options, value, onChange, label }) {
   return (
-    <div className="row" role="group" aria-label={label} style={{ gap: 0 }}>
+    <div className="seg" role="group" aria-label={label}>
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
-          className={`btn btn-sm${value === option.value ? ' btn-primary' : ''}`}
+          className="seg-btn"
           onClick={() => onChange(option.value)}
           aria-pressed={value === option.value}
-          style={{ marginInlineStart: -2 }}
         >
           {option.label}
         </button>
@@ -272,14 +277,14 @@ export function Segmented({ options, value, onChange, label }) {
 export function WeekNav({ label, onPrev, onNext, onToday }) {
   return (
     <div className="row" role="group" aria-label="ניווט בין שבועות">
-      <button type="button" className="btn btn-sm" onClick={onPrev} aria-label="השבוע הקודם">
-        ›
+      <button type="button" className="btn btn-sm btn-icon" onClick={onPrev} aria-label="השבוע הקודם">
+        <ChevronRight size={16} />
       </button>
       <span className="bold small nowrap tnum" style={{ minWidth: 118, textAlign: 'center' }}>
         {label}
       </span>
-      <button type="button" className="btn btn-sm" onClick={onNext} aria-label="השבוע הבא">
-        ‹
+      <button type="button" className="btn btn-sm btn-icon" onClick={onNext} aria-label="השבוע הבא">
+        <ChevronLeft size={16} />
       </button>
       {onToday && (
         <button type="button" className="btn btn-sm btn-ghost" onClick={onToday}>
@@ -302,7 +307,7 @@ export function ChipPicker({ options, selected, onToggle, emptyText = 'אין א
           <button
             key={option.value}
             type="button"
-            className={`btn btn-sm${on ? ' btn-primary' : ''}`}
+            className="chip"
             onClick={() => onToggle(option.value)}
             aria-pressed={on}
           >
@@ -321,17 +326,21 @@ export function Accordion({ title, meta, children, defaultOpen = false, actions 
   const id = useId();
 
   return (
-    <div style={{ borderBlockEnd: '2px solid var(--ink)' }}>
-      <div className="panel-head" style={{ borderBlockEnd: open ? '2px solid var(--ink)' : 'none' }}>
+    <div style={{ borderBlockEnd: '1px solid var(--line-soft)' }}>
+      <div className="panel-head" style={{ paddingBlock: 8 }}>
         <button
           type="button"
           className="btn btn-ghost"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-controls={id}
-          style={{ flex: 1, justifyContent: 'flex-start', boxShadow: 'none' }}
+          style={{ flex: 1, justifyContent: 'flex-start', color: 'var(--ink)' }}
         >
-          <span aria-hidden="true">{open ? '▾' : '◂'}</span>
+          <ChevronDown
+            size={16}
+            aria-hidden="true"
+            style={{ transform: open ? 'none' : 'rotate(90deg)', transition: 'transform 200ms var(--ease-out)', color: 'var(--muted)' }}
+          />
           <span className="bold">{title}</span>
           {meta && <span className="small muted">{meta}</span>}
         </button>

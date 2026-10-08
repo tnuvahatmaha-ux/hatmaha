@@ -24,6 +24,18 @@ const SELF_SCOPED = new Set([
   'GET /exceptions/',
   'GET /exceptions/:id',
   'POST /exceptions/:id/decision', // בודק canDecide בתוך ה-handler, מול נושא החריגה
+  'GET /updates/inbox',
+  'GET /updates/:id',                       // נמען או שולח בלבד — נבדק ב-service
+  'GET /updates/:id/attachments/:attId/url', // נמען או שולח בלבד — נבדק ב-service
+  'POST /updates/:id/read',
+  'POST /updates/:id/ack',
+]);
+
+/** קטלוגים לקריאה בלבד שממלאים טפסים של כל התפקידים — אינם מידע רגיש. */
+const PUBLIC_CATALOGS = new Set([
+  'GET /settings/domains',
+  'GET /settings/lookups/:kind',
+  'GET /settings/location-types',
 ]);
 
 /**
@@ -60,7 +72,7 @@ describe('כיסוי אכיפת הרשאות', () => {
     const unprotected = routes
       .filter((r) => !r.permission)
       .map((r) => r.key)
-      .filter((key) => !SELF_SCOPED.has(key));
+      .filter((key) => !SELF_SCOPED.has(key) && !PUBLIC_CATALOGS.has(key));
 
     expect(unprotected, `נתיבים ללא אכיפת הרשאה:\n  ${unprotected.join('\n  ')}`).toEqual([]);
   });
@@ -84,13 +96,13 @@ describe('כיסוי אכיפת הרשאות', () => {
 });
 
 describe('מרשם סוגי התנאים תואם למסד', () => {
-  it('כל 14 סוגי התנאים ממומשים בקוד', async () => {
+  it('כל 15 סוגי התנאים ממומשים בקוד', async () => {
     const { conditionCodes } = await import('../src/rules/registry.js');
     const expected = [
       'noOverlap', 'maxHoursPerDay', 'minRestHours', 'maxConsecutiveHours',
       'withinSiteHours', 'minNoticeDays', 'maxConstraintsPerWeek', 'requiresQualification',
       'mentorRatio', 'mandatoryTraining', 'availabilityRequired', 'deadline',
-      'blackoutDates', 'minStaffCoverage',
+      'blackoutDates', 'minStaffCoverage', 'minShiftsPerCategory',
     ];
     expect(conditionCodes.sort()).toEqual(expected.sort());
   });

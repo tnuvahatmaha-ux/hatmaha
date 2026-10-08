@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Field, Notice } from '../../components/ui/index.jsx';
+import { BrandMark } from '../../components/layout/Brand.jsx';
 
 export default function Register() {
   const { signUp, isAuthenticated } = useAuth();
@@ -59,9 +60,9 @@ export default function Register() {
     <div className="auth-shell">
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="brand-mark" aria-hidden="true">הט</div>
+          <BrandMark />
           <div>
-            <h1 style={{ fontSize: 18 }}>הרשמה</h1>
+            <h1>הרשמה</h1>
             <p className="small muted">יצירת חשבון חדש במערכת</p>
           </div>
         </div>

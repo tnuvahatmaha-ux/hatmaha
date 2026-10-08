@@ -8,6 +8,7 @@ import { setETag } from '../lib/etag.js';
 import { uuid, dateStr, timeStr, idParam } from '../schemas/common.schema.js';
 import * as svc from '../services/requests.service.js';
 import { query } from '../lib/db.js';
+import { rejectManagerSelfSubmission } from '../middleware/rejectManagerSelfSubmission.js';
 
 export const requestsRouter = Router();
 requestsRouter.use(requireAuth);
@@ -69,6 +70,7 @@ requestsRouter.post(
     targetUserId: req.body?.userId ?? req.user.userId,
   })),
   validate({ body: requestBody }),
+  rejectManagerSelfSubmission,
   async (req, res) => res.json(await svc.preview(req.user, req.body)),
 );
 
@@ -78,6 +80,7 @@ requestsRouter.post(
     targetUserId: req.body?.userId ?? req.user.userId,
   })),
   validate({ body: requestBody }),
+  rejectManagerSelfSubmission,
   async (req, res) => {
     const request = await svc.create(req.user, req.body);
     setETag(res, request);

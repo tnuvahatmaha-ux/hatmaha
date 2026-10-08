@@ -1,4 +1,5 @@
 import { toInstants, weekStartOf, addDays, overlaps } from '../lib/time.js';
+import { siteWindows, countAvailable } from '../services/availabilityWindows.js';
 
 /**
  * טעינת העובדות שהחוקים נבדקים מולן — בסבב אחד, לפני הערכת החוקים.
@@ -24,6 +25,7 @@ const NEEDS = {
   deadline: [],
   blackoutDates: [],
   minStaffCoverage: ['coverage'],
+  minShiftsPerCategory: ['availabilityCounts'],
 };
 
 export function factsNeededFor(conditionCodes) {
@@ -139,12 +141,33 @@ export async function loadFacts(tx, ctx, needed) {
     jobs.push(loadAvailability(tx, ctx).then((v) => { facts.availability = v; }));
   }
 
+  if (needed.has('availabilityCounts') && ctx.subjectType === 'availability' && ctx.subjectId) {
+    jobs.push(loadAvailabilityCounts(tx, ctx).then((v) => { facts.availabilityCounts = v; }));
+  }
+
   if (needed.has('coverage') && ctx.rosterVersionId) {
     jobs.push(loadCoverage(tx, ctx).then((v) => { facts.coverage = v; }));
   }
 
   await Promise.all(jobs);
   return facts;
+}
+
+/** ספירת המשמרות שסומנו "זמין" בהצהרה הנבדקת, לפי סוג ובסוף השבוע */
+async function loadAvailabilityCounts(tx, ctx) {
+  const [decl] = await tx.query(
+    'select site_id, week_start from availability_declarations where id = $1',
+    [ctx.subjectId],
+  );
+  if (!decl) return null;
+  const [cells, windows] = await Promise.all([
+    tx.query(
+      'select cell_date, start_time, end_time from availability_cells where declaration_id = $1',
+      [ctx.subjectId],
+    ),
+    siteWindows(tx.query, decl.site_id, decl.week_start),
+  ]);
+  return countAvailable({ cells, windows });
 }
 
 /**

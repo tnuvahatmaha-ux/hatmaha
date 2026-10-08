@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Field, Notice } from '../../components/ui/index.jsx';
+import { BrandMark } from '../../components/layout/Brand.jsx';
 
 export default function ResetPassword() {
   const { updatePassword, isAuthenticated, loading } = useAuth();
@@ -49,9 +50,9 @@ export default function ResetPassword() {
     <div className="auth-shell">
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="brand-mark" aria-hidden="true">הט</div>
+          <BrandMark />
           <div>
-            <h1 style={{ fontSize: 18 }}>סיסמה חדשה</h1>
+            <h1>סיסמה חדשה</h1>
             <p className="small muted">בחר/י סיסמה חדשה לחשבון</p>
           </div>
         </div>

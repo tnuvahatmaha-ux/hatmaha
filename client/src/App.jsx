@@ -28,6 +28,7 @@ import Implementers from './pages/Implementers.jsx';
 import Reports from './pages/Reports.jsx';
 import Notifications from './pages/Notifications.jsx';
 import Profile from './pages/Profile.jsx';
+import Messages from './pages/Messages.jsx';
 import Settings from './pages/settings/index.jsx';
 
 /**
@@ -61,6 +62,7 @@ export default function App() {
                 <Route path="schedule" element={<MySchedule />} />
                 <Route path="profile" element={<Profile />} />
                 <Route path="notifications" element={<Notifications />} />
+                <Route path="messages" element={<Messages />} />
 
                 <Route
                   path="dashboard"

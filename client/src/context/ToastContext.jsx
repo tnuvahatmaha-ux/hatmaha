@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { onServerWaking } from '../lib/api.js';
+import { GlyphIcon } from '../components/ui/icons.jsx';
 
 const ToastContext = createContext(null);
 
@@ -56,9 +57,9 @@ export function ToastProvider({ children }) {
       {children}
 
       {serverWaking && (
-        <div className="toasts" style={{ insetBlockEnd: 'auto', insetBlockStart: 16 }}>
+        <div className="toasts" style={{ top: 72 }}>
           <div className="toast toast-warn" role="status">
-            <span aria-hidden="true">⏳</span>
+            <span aria-hidden="true" style={{ display: 'flex' }}><GlyphIcon value="⏳" size={17} /></span>
             <div>
               <div className="bold">השרת מתעורר, זה עשוי לקחת כמה שניות…</div>
               <div className="tiny muted">
@@ -72,8 +73,8 @@ export function ToastProvider({ children }) {
       <div className="toasts" aria-live="polite" aria-atomic="false">
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast toast-${toast.kind}`} role="status">
-            <span aria-hidden="true">
-              {{ ok: '✓', error: '✕', warn: '⚠', info: 'ℹ' }[toast.kind] ?? 'ℹ'}
+            <span aria-hidden="true" style={{ display: 'flex', paddingBlockStart: 1, color: `var(--${{ ok: 'success', error: 'danger', warn: 'warn' }[toast.kind] ?? 'primary'})` }}>
+              <GlyphIcon value={{ ok: '✓', error: '⚠', warn: '⚠', info: 'ℹ' }[toast.kind] ?? 'ℹ'} size={17} />
             </span>
             <div style={{ flex: 1 }}>
               <div>{toast.text}</div>
@@ -85,7 +86,7 @@ export function ToastProvider({ children }) {
               onClick={() => dismiss(toast.id)}
               aria-label="סגירת ההודעה"
             >
-              ✕
+              <GlyphIcon value="✕" size={14} />
             </button>
           </div>
         ))}

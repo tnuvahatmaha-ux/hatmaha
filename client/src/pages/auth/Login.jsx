@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Field, Notice } from '../../components/ui/index.jsx';
+import { BrandMark } from '../../components/layout/Brand.jsx';
 
 export default function Login() {
   const { signIn, isAuthenticated } = useAuth();
@@ -32,9 +33,9 @@ export default function Login() {
     <div className="auth-shell">
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="brand-mark" aria-hidden="true">הט</div>
+          <BrandMark />
           <div>
-            <h1 style={{ fontSize: 18 }}>ניהול הטמעה</h1>
+            <h1>המטמיעון</h1>
             <p className="small muted">התחברות למערכת</p>
           </div>
         </div>

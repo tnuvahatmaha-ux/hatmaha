@@ -47,6 +47,8 @@ export const shiftTypeBody = z.object({
   subCategoryId: uuid.nullish(),
   displayOrder: z.coerce.number().int().optional(),
   isActive: z.boolean().optional(),
+  category: z.enum(['morning', 'afternoon', 'night']).nullish(),
+  period: z.enum(['training', 'golive', 'support']).nullish(),
 });
 // שעת סיום זהה לשעת ההתחלה היא משמרת של 24 שעות, לא משמרת ריקה
 export const shiftTypeRefined = shiftTypeBody.refine(
@@ -61,6 +63,16 @@ export const locationBody = z.object({
   locationTypeId: uuid.nullish(),
   capacity: z.coerce.number().int().min(1).max(9999).nullish(),
   isActive: z.boolean().optional(),
+  periods: z.array(z.enum(['training', 'golive', 'support'])).min(1, 'יש לבחור לפחות שלב אחד').max(3).optional(),
+});
+
+export const copyDomainBody = z.object({
+  fromDomainId: uuid,
+  toDomainId: uuid,
+  targetSiteId: uuid.nullish(),
+  locationIds: z.array(uuid).max(100).nullish(),
+  period: z.enum(['training', 'golive', 'support']).nullish(),
+  mode: z.enum(['merge', 'replace']).default('merge'),
 });
 
 export const periodsBody = z.object({

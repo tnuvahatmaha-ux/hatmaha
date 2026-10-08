@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "שרת API למערכת ניהול צוות הטמעה",
+  "description": "שרת ה-API של המטמיעון",
   "engines": {
     "node": ">=20"
   },

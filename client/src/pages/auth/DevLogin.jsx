@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Notice, Loading, ErrorState, Tag } from '../../components/ui/index.jsx';
 import { ROLE_NAMES } from '../../lib/format.js';
+import { BrandMark } from '../../components/layout/Brand.jsx';
 
 const API = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
 
@@ -56,9 +57,9 @@ export default function DevLogin() {
     <div className="auth-shell">
       <div className="auth-card" style={{ maxWidth: 520 }}>
         <div className="auth-brand">
-          <div className="brand-mark" aria-hidden="true">הט</div>
+          <BrandMark />
           <div>
-            <h1 style={{ fontSize: 18 }}>ניהול הטמעה</h1>
+            <h1>המטמיעון</h1>
             <p className="small muted">כניסה במצב פיתוח מקומי</p>
           </div>
         </div>

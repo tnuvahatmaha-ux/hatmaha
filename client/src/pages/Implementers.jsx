@@ -3,14 +3,26 @@ import { useApi, useAction } from '../lib/useApi.js';
 import { get, post, patch, put, newIdempotencyKey } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { ViewHead, Avatar } from '../components/layout/AppLayout.jsx';
+import { Link } from 'react-router-dom';
 import {
-  Panel, StateView, Tag, Notice, Field, Modal, ChipPicker, Empty,
+  Panel, StateView, Tag, Notice, Field, Modal, ChipPicker, Empty, Segmented, ConfirmDialog,
 } from '../components/ui/index.jsx';
+import { usePermissions } from '../context/PermissionsContext.jsx';
+import { ResponsibilityForm } from './settings/MentorsTab.jsx';
+import { del } from '../lib/api.js';
 import { fmtDateFull, ROLE_NAMES, STATUS_NAMES, statusTone } from '../lib/format.js';
 
-/** ניהול המטמיעים, ואשף הקליטה של §5.1. */
+const ROLE_TABS = [
+  { value: 'trainees', label: 'מטמיעים', roles: ['implementer', 'lead'] },
+  { value: 'mentors', label: 'מדריכים', roles: ['mentor'] },
+  { value: 'managers', label: 'מנהלים', roles: ['manager'] },
+  { value: 'all', label: 'כולם', roles: ['implementer', 'lead', 'mentor', 'manager'] },
+];
+
+/** ניהול האנשים במערכת — מטמיעים, מדריכים ומנהלים — ואשף הקליטה של §5.1. */
 export default function Implementers() {
   const toast = useToast();
+  const [tab, setTab] = useState('trainees');
   const [filters, setFilters] = useState({ q: '', siteId: '', domainId: '', status: 'active' });
   const [onboarding, setOnboarding] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -20,16 +32,18 @@ export default function Implementers() {
   const domains = useApi('/api/settings/domains');
   const unassigned = useApi('/api/settings/mentors/unassigned-implementers');
 
-  const people = (users.data?.users ?? []).filter((u) => ['implementer', 'lead'].includes(u.base_role));
+  const tabRoles = ROLE_TABS.find((t) => t.value === tab).roles;
+  const people = (users.data?.users ?? []).filter((u) => tabRoles.includes(u.base_role));
+  const countFor = (roles) => (users.data?.users ?? []).filter((u) => roles.includes(u.base_role)).length;
 
   return (
     <>
       <ViewHead
-        title="מטמיעים"
-        subtitle="קליטה, שיוך מקצועי, שיוך לאתר ולמדריך"
+        title="אנשים"
+        subtitle="קליטה, תפקידים, שיוך מקצועי, שיוך לאתר ולמדריך"
         actions={
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setOnboarding(true)}>
-            + קליטת מטמיע
+          <button type="button" className="btn btn-primary" onClick={() => setOnboarding(true)}>
+            + קליטה חדשה
           </button>
         }
       />
@@ -42,7 +56,19 @@ export default function Implementers() {
         </Notice>
       )}
 
-      <Panel title="סינון" flush>
+      <div className="row" style={{ marginBlockEnd: 'var(--space-4)' }}>
+        <Segmented
+          label="סינון לפי תפקיד"
+          value={tab}
+          onChange={setTab}
+          options={ROLE_TABS.map((t) => ({
+            value: t.value,
+            label: users.data ? `${t.label} (${countFor(t.roles)})` : t.label,
+          }))}
+        />
+      </div>
+
+      <Panel flush>
         <div className="panel-body row">
           <input
             type="text"
@@ -84,13 +110,17 @@ export default function Implementers() {
         </div>
       </Panel>
 
-      <Panel title={`${people.length} מטמיעים`} flush>
+      <Panel title={`${people.length} ${ROLE_TABS.find((t) => t.value === tab).label}`} flush>
         <StateView
           loading={users.loading}
           error={users.error}
           onRetry={users.reload}
           empty={!users.loading && people.length === 0}
-          emptyProps={{ icon: '🧑‍💻', title: 'לא נמצאו מטמיעים', text: 'אפשר לקלוט מטמיע חדש דרך אשף הקליטה.' }}
+          emptyProps={
+            tab === 'mentors'
+              ? { icon: '👤', title: 'עדיין אין מדריכים', text: 'פותחים אדם מהלשונית "כולם" ומשנים את התפקיד שלו ל"מדריך".' }
+              : { icon: '👤', title: 'לא נמצאו אנשים', text: 'אפשר לקלוט אדם חדש דרך אשף הקליטה.' }
+          }
         >
           <div className="table-wrap">
             <table className="table table-cards">
@@ -108,15 +138,22 @@ export default function Implementers() {
               <tbody>
                 {people.map((person) => {
                   const primaryMentor = person.mentors.find((m) => m.isPrimary);
-                  const missing = !person.sites.length || !person.domains.length || !primaryMentor;
+                  const trainee = ['implementer', 'lead'].includes(person.base_role);
+                  const missing = trainee && (!person.sites.length || !person.domains.length || !primaryMentor);
 
                   return (
-                    <tr key={person.id} style={missing ? { background: 'var(--warn-bg)' } : undefined}>
-                      <td data-label="שם" className="bold">{person.full_name}</td>
+                    <tr key={person.id}>
+                      <td data-label="שם" className="bold">
+                        <span className="row" style={{ flexWrap: 'nowrap' }}>
+                          <Avatar name={person.full_name} size={28} />
+                          {person.full_name}
+                          {missing && <Tag tone="warn">שיוך חסר</Tag>}
+                        </span>
+                      </td>
                       <td data-label="תפקיד">{ROLE_NAMES[person.base_role]}</td>
-                      <td data-label="אתר">{person.sites.map((s) => s.name).join(', ') || <Missing />}</td>
-                      <td data-label="תחום">{person.domains.map((d) => d.name).join(', ') || <Missing />}</td>
-                      <td data-label="מדריך ראשי">{primaryMentor?.name ?? <Missing />}</td>
+                      <td data-label="אתר">{person.sites.map((s) => s.name).join(', ') || (trainee ? <Missing /> : '—')}</td>
+                      <td data-label="תחום">{person.domains.map((d) => d.name).join(', ') || (trainee ? <Missing /> : '—')}</td>
+                      <td data-label="מדריך ראשי">{primaryMentor?.name ?? (trainee ? <Missing /> : '—')}</td>
                       <td data-label="סטטוס">
                         <Tag tone={statusTone(person.status)}>{STATUS_NAMES[person.status]}</Tag>
                       </td>
@@ -422,8 +459,128 @@ const Summary = ({ label, value }) => (
    כרטיס אישי
    ========================================================================== */
 
-function PersonDialog({ person, onClose, onChanged }) {
+const ROLE_EFFECTS = {
+  mentor: 'שיוכי המדריך שהיו לו כמטמיע יסתיימו. אחרי השינוי מגדירים לו תחומי אחריות, ואז אפשר לשייך אליו מטמיעים.',
+  manager: 'מנהל הטמעה מקבל גישה מלאה למערכת, אינו משובץ ואינו מגיש זמינות.',
+  implementer: 'אם היה מדריך — הצוות שלו ותחומי האחריות שלו יסתיימו.',
+  lead: 'אם היה מדריך — הצוות שלו ותחומי האחריות שלו יסתיימו.',
+};
+
+/** שינוי תפקיד — למנהל הטמעה בלבד */
+function RoleSection({ person, onChanged }) {
   const toast = useToast();
+  const [role, setRole] = useState(person.base_role);
+  const [confirming, setConfirming] = useState(false);
+
+  const change = useAction(
+    async () => {
+      const { user } = await patch(`/api/users/${person.id}`, { baseRole: role });
+      (user.warnings ?? []).forEach((w, i) => (i === 0 ? toast.success(w) : toast.warn(w)));
+      setConfirming(false);
+      onChanged(user);
+    },
+    { onError: (err) => { setConfirming(false); toast.error(err); } },
+  );
+
+  return (
+    <>
+      <Field label="תפקיד במערכת" hint="קובע מה האדם רואה ומה הוא רשאי לעשות">
+        {(props) => (
+          <div className="row" style={{ flexWrap: 'nowrap' }}>
+            <select {...props} value={role} onChange={(e) => setRole(e.target.value)}>
+              {Object.entries(ROLE_NAMES).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={role === person.base_role || change.busy}
+              onClick={() => setConfirming(true)}
+            >
+              שינוי תפקיד
+            </button>
+          </div>
+        )}
+      </Field>
+
+      {confirming && (
+        <ConfirmDialog
+          title={`להפוך את ${person.full_name} ל${ROLE_NAMES[role]}?`}
+          message={ROLE_EFFECTS[role]}
+          confirmLabel="שינוי תפקיד"
+          tone="primary"
+          busy={change.busy}
+          onConfirm={() => change.run()}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
+    </>
+  );
+}
+
+/** תחומי האחריות של מדריך — הם קובעים את מי אפשר לשייך אליו */
+function MentorResponsibilities({ person }) {
+  const toast = useToast();
+  const mentors = useApi('/api/settings/mentors', { q: person.full_name });
+  const [adding, setAdding] = useState(false);
+  const mentor = (mentors.data?.mentors ?? []).find((m) => m.id === person.id);
+  const current = (mentor?.responsibilities ?? []).filter((r) => !r.toDate || r.toDate > new Date().toISOString().slice(0, 10));
+
+  const end = useAction(
+    async (id) => {
+      await del(`/api/settings/mentors/responsibilities/${id}`);
+      toast.success('תחום האחריות הסתיים');
+      mentors.reload();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <>
+      <div className="row" style={{ marginBlockEnd: 'var(--space-2)' }}>
+        <h3>תחומי אחריות</h3>
+        {mentor && <Tag>{mentor.implementer_count} מטמיעים בצוות</Tag>}
+        <button type="button" className="btn btn-sm row-end" onClick={() => setAdding(true)}>
+          + תחום אחריות
+        </button>
+      </div>
+      <StateView loading={mentors.loading} error={mentors.error} onRetry={mentors.reload}>
+        {current.length === 0 ? (
+          <Notice tone="warn" icon="⚠">
+            עדיין אין תחומי אחריות. בלי תחום אחריות אי אפשר לשייך למדריך מטמיעים.
+          </Notice>
+        ) : (
+          <div className="stack" style={{ gap: 6 }}>
+            {current.map((r) => (
+              <div key={r.id} className="file-row">
+                <span style={{ flex: 1 }}>
+                  {r.siteName ?? 'כל האתרים'} · {r.domainName ?? 'כל התחומים'}
+                  {r.subCategoryName && ` · ${r.subCategoryName}`}
+                </span>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => end.run(r.id)} disabled={end.busy}>
+                  סיום
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </StateView>
+      {adding && (
+        <ResponsibilityForm
+          mentor={{ id: person.id, full_name: person.full_name }}
+          onClose={() => setAdding(false)}
+          onSaved={() => { setAdding(false); mentors.reload(); toast.success('תחום האחריות נוסף'); }}
+        />
+      )}
+    </>
+  );
+}
+
+function PersonDialog({ person: initial, onClose, onChanged }) {
+  const toast = useToast();
+  const { role: myRole } = usePermissions();
+  const [person, setPerson] = useState(initial);
   const domains = useApi('/api/settings/domains');
   const sites = useApi('/api/sites');
   const mentors = useApi('/api/settings/mentors', { status: 'active' });
@@ -505,12 +662,31 @@ function PersonDialog({ person, onClose, onChanged }) {
         <Tag tone={statusTone(current.status)} >{STATUS_NAMES[current.status]}</Tag>
       </div>
 
+      {myRole === 'manager' && (
+        <RoleSection
+          key={person.base_role}
+          person={person}
+          onChanged={(user) => {
+            setPerson({ ...person, base_role: user.base_role });
+            detail.reload();
+            mentors.reload();
+            onChanged();
+          }}
+        />
+      )}
+
+      {person.base_role === 'manager' ? (
+        <Notice icon="ℹ">
+          מנהל הטמעה אינו משויך לאתר, אינו משובץ ואינו מגיש זמינות.
+        </Notice>
+      ) : (
       <StateView loading={domains.loading} error={domains.error}>
-        <Field label="תחומים" required>
+        <Field label="תחומים" required={person.base_role !== 'mentor'}>
           <ChipPicker
             options={(domains.data?.domains ?? []).map((d) => ({ value: d.id, label: d.name }))}
             selected={domainIds}
             onToggle={(id) => toggle(domainIds, setDomainIds, id)}
+            emptyText={<>עדיין לא הוגדרו תחומים. <Link to="/settings">הגדרת תחומים</Link></>}
           />
         </Field>
 
@@ -543,6 +719,10 @@ function PersonDialog({ person, onClose, onChanged }) {
 
         <div className="divider" />
 
+        {person.base_role === 'mentor' ? (
+          <MentorResponsibilities person={person} />
+        ) : (
+        <>
         <h3 style={{ marginBlockEnd: 'var(--space-2)' }}>מדריכים</h3>
 
         {current.mentors?.length > 0 ? (
@@ -564,7 +744,9 @@ function PersonDialog({ person, onClose, onChanged }) {
               value={mentorId}
               onChange={(e) => { setMentorId(e.target.value); setValidation(null); }}
             >
-              <option value="">בחירת מדריך</option>
+              <option value="">
+                {(mentors.data?.mentors ?? []).length ? 'בחירת מדריך' : 'אין עדיין מדריכים במערכת'}
+              </option>
               {(mentors.data?.mentors ?? []).map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.full_name} ({m.implementer_count} מטמיעים)
@@ -606,7 +788,15 @@ function PersonDialog({ person, onClose, onChanged }) {
             {assignMentor.busy ? 'משייך…' : 'שיוך כמדריך ראשי'}
           </button>
         </div>
+        {!mentors.loading && (mentors.data?.mentors ?? []).length === 0 && (
+          <p className="small muted mt-3">
+            כדי להגדיר מדריך: סגור/י את החלון, עבור/י ללשונית "כולם", פתח/י את האדם ושנה/י את התפקיד שלו ל"מדריך".
+          </p>
+        )}
+        </>
+        )}
       </StateView>
+      )}
     </Modal>
   );
 }
