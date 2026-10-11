@@ -282,8 +282,6 @@ export default function Roster() {
 
 function RosterMatrix({ board, editable, onChanged }) {
   const { days, locations } = board;
-  // שבוע שחוצה את מועד העלייה לאוויר: לכל יום תגית שלב
-  const mixedPhases = new Set(Object.values(board.phases ?? {})).size > 1;
 
   return (
     <div className="roster-wrap">
@@ -297,7 +295,7 @@ function RosterMatrix({ board, editable, onChanged }) {
           <div key={date} className="roster-dayhead">
             {dayName(date)}
             <small className="tnum">{fmtDate(date)}</small>
-            {mixedPhases && board.phases?.[date] && (
+            {board.phases?.[date] && (
               <span className={`phase phase-${board.phases[date]}`}>{PHASE_NAMES[board.phases[date]]}</span>
             )}
           </div>
