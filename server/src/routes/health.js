@@ -1,33 +1,21 @@
 import { Router } from 'express';
 import { ping, query } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
+import { MARKERS } from '../lib/migrate.js';
 
 export const healthRouter = Router();
 
 const startedAt = Date.now();
 
 /**
- * סימן אחד לכל מיגרציה שהקוד תלוי בה. המיגרציות מורצות ידנית ב-Supabase,
- * ולכן קוד שנפרס לפני שהן רצו נכשל ב"שגיאה בגישה לנתונים" בלי הסבר.
- * כאן רואים מיד מה חסר — בלי לחשוף נתונים.
+ * מיגרציות שהקוד תלוי בהן ועוד לא קיימות במסד. בדרך כלל השרת מריץ אותן לבד
+ * בעלייה (lib/migrate.js); אם אחת נכשלה — כאן רואים מה חסר, בלי לחשוף נתונים.
  */
-const SCHEMA_MARKERS = {
-  '0017': `select exists (select 1 from role_permissions rp join permissions p on p.id = rp.permission_id
-             where rp.role = 'mentor' and p.resource = 'requests' and p.action = 'create') as ok`,
-  '0018': `select exists (select 1 from pg_proc where proname = 'site_period_on') as ok`,
-  '0019': `select exists (select 1 from information_schema.columns
-             where table_name = 'shift_types' and column_name = 'category') as ok`,
-  '0020': `select exists (select 1 from information_schema.columns
-             where table_name = 'updates' and column_name = 'requires_ack') as ok`,
-  '0021': `select exists (select 1 from information_schema.tables where table_name = 'chat_groups') as ok`,
-  '0022': `select exists (select 1 from information_schema.tables where table_name = 'skill_scores') as ok`,
-};
-
 export async function missingMigrations() {
   const missing = [];
-  for (const [name, sql] of Object.entries(SCHEMA_MARKERS)) {
+  for (const [no, sql] of Object.entries(MARKERS)) {
     const [row] = await query(sql);
-    if (!row?.ok) missing.push(name);
+    if (!row?.ok) missing.push(String(no).padStart(4, '0'));
   }
   return missing;
 }

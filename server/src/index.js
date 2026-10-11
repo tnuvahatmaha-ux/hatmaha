@@ -2,6 +2,15 @@ import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { createApp } from './app.js';
 import { closePool } from './lib/db.js';
+import { runPendingMigrations } from './lib/migrate.js';
+
+// המסד מתעדכן לפני שהשרת מקבל בקשות — כך קוד חדש לא רץ מול סכמה ישנה
+try {
+  const applied = await runPendingMigrations();
+  if (applied.length) logger.info('המסד עודכן', { applied });
+} catch (err) {
+  logger.error('בדיקת המיגרציות נכשלה', { message: err.message });
+}
 
 const app = createApp();
 

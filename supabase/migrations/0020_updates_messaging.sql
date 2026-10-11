@@ -47,4 +47,7 @@ begin
       on conflict (id) do nothing
     $q$;
   end if;
+exception when insufficient_privilege then
+  -- בלי הרשאה על סכמת storage — יוצרים את ה-bucket ידנית (DEPLOY.md, "אחסון קבצים")
+  raise notice 'לא נוצר bucket attachments: אין הרשאה';
 end $$;
