@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ChatGroups } from './ChatGroups.jsx';
 import { Paperclip, Send, BellRing, Download, CheckCircle2 } from 'lucide-react';
 import { useApi, useAction } from '../lib/useApi.js';
 import { get, post, del } from '../lib/api.js';
@@ -39,18 +40,22 @@ export default function Messages() {
         }
       />
 
-      {canSend && (
-        <div className="row" style={{ marginBlockEnd: 'var(--space-4)' }}>
-          <Segmented
-            label="תיבת הודעות"
-            value={tab}
-            onChange={setTab}
-            options={[{ value: 'inbox', label: 'נכנסות' }, { value: 'sent', label: 'נשלחו' }]}
-          />
-        </div>
-      )}
+      <div className="row" style={{ marginBlockEnd: 'var(--space-4)' }}>
+        <Segmented
+          label="תיבת הודעות"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'inbox', label: 'נכנסות' },
+            ...(canSend ? [{ value: 'sent', label: 'נשלחו' }] : []),
+            { value: 'groups', label: 'קבוצות' },
+          ]}
+        />
+      </div>
 
-      {tab === 'inbox' ? (
+      {tab === 'groups' ? (
+        <ChatGroups canCreate={canSend} />
+      ) : tab === 'inbox' ? (
         <Panel flush>
           <StateView
             loading={inbox.loading}
@@ -146,8 +151,15 @@ function Compose({ onClose, onSent }) {
   const toast = useToast();
   const { role } = usePermissions();
   const options = useApi('/api/updates/recipients');
-  const [form, setForm] = useState({ title: '', body: '', requiresAck: true, toWholeTeam: true });
+  const [form, setForm] = useState({ title: '', body: '', requiresAck: true });
+  const [mode, setMode] = useState('team');
+  const [targetId, setTargetId] = useState('');
   const [recipientIds, setRecipientIds] = useState([]);
+  const domains = useApi('/api/settings/domains');
+  const sites = useApi(mode === 'site' ? '/api/sites' : null);
+  const domainList = domains.data?.domains ?? [];
+  const isGroup = ['domain', 'sub_category', 'site'].includes(mode);
+  const audience = useApi(isGroup && targetId ? '/api/updates/audience' : null, { audience: mode, targetId });
   const [files, setFiles] = useState([]);
 
   const recipients = options.data?.recipients ?? [];
@@ -160,8 +172,9 @@ function Compose({ onClose, onSent }) {
         title: form.title,
         body: form.body,
         requiresAck: form.requiresAck,
-        toWholeTeam: form.toWholeTeam,
-        recipientIds: form.toWholeTeam ? [] : recipientIds,
+        ...(isGroup
+          ? { audience: mode, targetId }
+          : { toWholeTeam: mode === 'team', recipientIds: mode === 'people' ? recipientIds : [] }),
       });
 
       // הקבצים עולים ישירות ל-Storage, ורק אחר כך ההודעה נשלחת
@@ -191,7 +204,8 @@ function Compose({ onClose, onSent }) {
   );
 
   const tooBig = files.find((f) => f.size > 10 * 1024 * 1024);
-  const ready = form.title.trim() && form.body.trim() && (form.toWholeTeam || recipientIds.length) && !tooBig;
+  const hasTarget = mode === 'team' || (mode === 'people' ? recipientIds.length > 0 : targetId && audience.data?.count > 0);
+  const ready = form.title.trim() && form.body.trim() && hasTarget && !tooBig;
 
   return (
     <Modal
@@ -208,26 +222,49 @@ function Compose({ onClose, onSent }) {
       }
     >
       <StateView loading={options.loading} error={options.error} onRetry={options.reload}>
-        <Field label="נמענים" required>
+        <Field label="למי" required>
           {() => (
-            <div className="stack" style={{ gap: 8 }}>
-              <label className="check">
-                <input
-                  type="radio"
-                  checked={form.toWholeTeam}
-                  onChange={() => setForm({ ...form, toWholeTeam: true })}
-                />
-                {teamLabel} ({recipients.filter((r) => role !== 'manager' || r.base_role !== 'manager').length})
-              </label>
-              <label className="check">
-                <input
-                  type="radio"
-                  checked={!form.toWholeTeam}
-                  onChange={() => setForm({ ...form, toWholeTeam: false })}
-                />
-                בחירת נמענים
-              </label>
-              {!form.toWholeTeam && (
+            <div className="stack" style={{ gap: 10 }}>
+              <Segmented
+                label="סוג הנמענים"
+                value={mode}
+                onChange={(m) => { setMode(m); setTargetId(''); }}
+                options={[
+                  { value: 'team', label: 'כל הצוות' },
+                  { value: 'domain', label: 'תחום' },
+                  { value: 'sub_category', label: 'תת-תחום' },
+                  { value: 'site', label: 'אתר' },
+                  { value: 'people', label: 'אנשים' },
+                ]}
+              />
+
+              {mode === 'team' && (
+                <span className="small muted">
+                  {teamLabel} · {recipients.filter((r) => role !== 'manager' || r.base_role !== 'manager').length} נמענים
+                </span>
+              )}
+
+              {['domain', 'sub_category', 'site'].includes(mode) && (
+                <>
+                  <select value={targetId} onChange={(e) => setTargetId(e.target.value)} aria-label="בחירת קבוצה">
+                    <option value="">{{ domain: 'בחירת תחום', sub_category: 'בחירת תת-תחום', site: 'בחירת אתר' }[mode]}</option>
+                    {mode === 'domain' && domainList.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    {mode === 'sub_category' && domainList.flatMap((d) => d.subCategories.map((sc) => (
+                      <option key={sc.id} value={sc.id}>{d.name} · {sc.name}</option>
+                    )))}
+                    {mode === 'site' && (sites.data?.sites ?? []).map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
+                  </select>
+                  {targetId && (
+                    <span className="small muted">
+                      {audience.loading ? 'סופר נמענים…'
+                        : audience.error ? audience.error.message
+                        : `${audience.data?.count ?? 0} נמענים`}
+                    </span>
+                  )}
+                </>
+              )}
+
+              {mode === 'people' && (
                 <div className="row" style={{ gap: 6 }}>
                   {recipients.length === 0 && <span className="small muted">אין נמענים זמינים</span>}
                   {recipients.map((r) => {

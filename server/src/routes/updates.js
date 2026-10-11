@@ -33,6 +33,19 @@ updatesRouter.get(
   async (req, res) => res.json({ recipients: await svc.allowedRecipients(req.user), storageEnabled }),
 );
 
+/** כמה נמענים יקבלו הודעה לקבוצה — למונה החי בחלון הכתיבה */
+updatesRouter.get(
+  '/audience',
+  requirePermission('updates', 'create'),
+  validate({
+    query: z.object({ audience: z.enum(['domain', 'sub_category', 'site']), targetId: uuid }),
+  }),
+  async (req, res) => {
+    const rows = await svc.audienceRecipients(req.user, req.validQuery.audience, req.validQuery.targetId);
+    res.json({ count: rows.length, recipients: rows });
+  },
+);
+
 updatesRouter.post(
   '/',
   requirePermission('updates', 'create'),
@@ -43,6 +56,8 @@ updatesRouter.post(
       recipientIds: z.array(uuid).max(500).default([]),
       toWholeTeam: z.boolean().default(false),
       requiresAck: z.boolean().default(false),
+      audience: z.enum(['users', 'domain', 'sub_category', 'site']).default('users'),
+      targetId: uuid.nullish(),
     }),
   }),
   async (req, res) => res.status(201).json(await svc.create(req.user, req.body)),

@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import { capabilities, effectiveMatrix } from '../permissions/engine.js';
 import { loadPrincipal } from '../permissions/repository.js';
 import { query, queryOne } from '../lib/db.js';
+import { missingMigrations } from './health.js';
 
 export const authRouter = Router();
 
@@ -77,6 +78,8 @@ authRouter.get('/me', async (req, res) => {
     missingAssignments: missing,
     // מנהל הטמעה אינו משובץ במשמרות, ולכן אינו מגיש זמינות או אילוצים לעצמו
     submitsAvailability: profile.base_role !== 'manager',
+    // למנהל: מיגרציות שעוד לא הורצו ב-Supabase — מוצג כבאנר בבית
+    missingMigrations: profile.base_role === 'manager' ? await missingMigrations().catch(() => []) : [],
     scopes: req.user.scopes,
     trainingStatus,
   });

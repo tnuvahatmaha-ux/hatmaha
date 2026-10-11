@@ -19,9 +19,11 @@ const SCHEMA_MARKERS = {
              where table_name = 'shift_types' and column_name = 'category') as ok`,
   '0020': `select exists (select 1 from information_schema.columns
              where table_name = 'updates' and column_name = 'requires_ack') as ok`,
+  '0021': `select exists (select 1 from information_schema.tables where table_name = 'chat_groups') as ok`,
+  '0022': `select exists (select 1 from information_schema.tables where table_name = 'skill_scores') as ok`,
 };
 
-async function missingMigrations() {
+export async function missingMigrations() {
   const missing = [];
   for (const [name, sql] of Object.entries(SCHEMA_MARKERS)) {
     const [row] = await query(sql);

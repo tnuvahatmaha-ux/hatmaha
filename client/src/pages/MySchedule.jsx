@@ -83,6 +83,11 @@ export default function MySchedule() {
                         <div className="small muted">
                           {[item.site_name, item.location_name].filter(Boolean).join(' · ') || '—'}
                         </div>
+                        {item.note && (
+                          <div className="small" style={{ color: 'var(--primary)', marginBlockStart: 2 }}>
+                            הערה: {item.note}
+                          </div>
+                        )}
                       </div>
                       {item.overlap && <Tag tone="danger">חפיפה</Tag>}
                       <Tag tone={{ shift: 'accent', activity: '', constraint: 'warn' }[item.kind]}>

@@ -23,6 +23,7 @@ const NAV = [
   { group: 'ראשי', to: '/team-schedule', label: 'לו״ז צוות', need: ['teamSchedule', 'view'] },
   { group: 'ראשי', to: '/my-team', label: 'הצוות שלי', need: ['implementers', 'view'], roles: ['mentor'] },
   { group: 'ראשי', to: '/messages', label: 'הודעות', badge: 'messages', tab: 3 },
+  { group: 'ראשי', to: '/skills', label: 'סקילומטר', need: ['skills', 'view'] },
   { group: 'בקשות', to: '/requests', label: 'בקשות וזמינות', need: ['requests', 'create'], selfOnly: true },
   { group: 'בקשות', to: '/approvals', label: 'בקשות ואישורים', need: ['requests', 'approve'] },
   { group: 'בקשות', to: '/activities', label: 'פעילויות והדרכות', need: ['activities', 'view'] },

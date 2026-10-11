@@ -16,6 +16,8 @@ import { reportsRouter } from './reports.js';
 import { notificationsRouter } from './notifications.js';
 import { auditRouter } from './audit.js';
 import { updatesRouter } from './updates.js';
+import { chatRouter } from './chat.js';
+import { skillsRouter } from './skills.js';
 
 /**
  * טבלת ההרכבה, כדאטה.
@@ -44,6 +46,8 @@ export const API_ROUTES = [
   ['/reports', reportsRouter],
   ['/notifications', notificationsRouter],
   ['/updates', updatesRouter],
+  ['/chat', chatRouter],
+  ['/skills', skillsRouter],
   ['/audit', auditRouter],
 ];
 

@@ -1,8 +1,8 @@
-import { MapPin } from 'lucide-react';
+import { MapPin, MessageSquareText } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi, useAction } from '../lib/useApi.js';
-import { post, del, download, newIdempotencyKey } from '../lib/api.js';
+import { post, patch, del, download, newIdempotencyKey } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { usePermissions } from '../context/PermissionsContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
@@ -376,6 +376,10 @@ const PHASE_NAMES = { training: 'הכשרה', golive: 'עלייה לאוויר',
 
 function Slot({ board, location, date, shift, editable, onChanged }) {
   const toast = useToast();
+  const { can } = usePermissions();
+  // הערה לעובד מותרת גם בסידור שפורסם — היא לא משנה את השיבוץ עצמו
+  const canNote = can('roster', 'edit');
+  const [noteFor, setNoteFor] = useState(null);
 
   const inCell = board.assignments.filter(
     (a) => a.location_id === location.id && a.assignment_date === date && a.shift_type_id === shift.id,
@@ -472,8 +476,15 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
         const tooltip = [...flags.map((f) => f.label), assignment.warning_text].filter(Boolean).join(' · ');
 
         return (
-          <span key={assignment.id} className={`roster-chip${issue ? ' issue' : ''}`} title={tooltip || undefined}>
-            {shortName(assignment.user_name)}
+          <span key={assignment.id} className={`roster-chip${issue ? ' issue' : ''}`}
+            title={[tooltip, assignment.note && `הערה: ${assignment.note}`].filter(Boolean).join(' · ') || undefined}>
+            {canNote ? (
+              <button type="button" className="chip-name" onClick={() => setNoteFor(assignment)}
+                aria-label={`הערה ל${assignment.user_name} במשמרת ${shift.name}`}>
+                {shortName(assignment.user_name)}
+              </button>
+            ) : shortName(assignment.user_name)}
+            {assignment.note && <MessageSquareText size={12} aria-label="יש הערה" style={{ color: 'var(--primary)' }} />}
             {issue && <span aria-hidden="true">⚠</span>}
             {editable && (
               <button
@@ -509,7 +520,57 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
           })}
         </select>
       )}
+
+      {noteFor && (
+        <AssignmentNote
+          assignment={noteFor}
+          shift={shift}
+          date={date}
+          onClose={() => setNoteFor(null)}
+          onSaved={() => { setNoteFor(null); onChanged(); }}
+        />
+      )}
     </div>
+  );
+}
+
+/** הערה לעובד על משמרת מסוימת — העובד רואה אותה בלו״ז שלו */
+function AssignmentNote({ assignment, shift, date, onClose, onSaved }) {
+  const toast = useToast();
+  const [note, setNote] = useState(assignment.note ?? '');
+  const save = useAction(
+    async () => {
+      await patch(`/api/roster/assignments/${assignment.id}/note`, { note });
+      toast.success(note.trim() ? 'ההערה נשמרה' : 'ההערה הוסרה');
+      onSaved();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <Modal
+      title={`הערה ל${assignment.user_name}`}
+      onClose={onClose}
+      width={460}
+      footer={
+        <>
+          <button type="button" className="btn btn-primary" onClick={() => save.run()} disabled={save.busy}>
+            {save.busy ? 'שומר…' : 'שמירה'}
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>
+        </>
+      }
+    >
+      <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>
+        {shift.name} · {dayName(date)} {fmtDate(date)} · {fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}
+      </p>
+      <Field label="הערה לעובד" hint="העובד יראה אותה בלו״ז שלו. אם הסידור כבר פורסם — הוא יקבל התראה">
+        {(props) => (
+          <textarea {...props} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)}
+            placeholder="למשל: להגיע 10 דקות קודם לחפיפה עם נועה" />
+        )}
+      </Field>
+    </Modal>
   );
 }
 
@@ -610,6 +671,7 @@ function RosterList({ board, editable, onChanged }) {
                     </td>
                     <td data-label="התראות">
                       {a.warning_text ? <Tag tone="warn">{a.warning_text}</Tag> : <Tag tone="ok">תקין</Tag>}
+                      {a.note && <div className="small muted">הערה: {a.note}</div>}
                     </td>
                     <td>
                       {editable && (

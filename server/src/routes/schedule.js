@@ -34,7 +34,8 @@ scheduleRouter.get(
       select 'shift' as kind, ra.id, ra.assignment_date as entry_date,
              ra.starts_at, ra.ends_at,
              coalesce(st.name, 'משמרת') as title,
-             s.name as site_name, l.name as location_name, 'published' as status
+             s.name as site_name, l.name as location_name, 'published' as status,
+             ra.note
         from roster_assignments ra
         join roster_versions v on v.id = ra.version_id
         join sites s on s.id = ra.site_id
@@ -48,7 +49,7 @@ scheduleRouter.get(
 
       select 'activity', a.id, a.activity_date, a.starts_at, a.ends_at,
              coalesce(nullif(btrim(a.title), ''), at.name_he),
-             s.name, l.name, a.status
+             s.name, l.name, a.status, null
         from activities a
         join activity_participants ap on ap.activity_id = a.id and ap.user_id = $1
         join activity_types at on at.id = a.activity_type_id
@@ -62,7 +63,7 @@ scheduleRouter.get(
       union all
 
       select 'constraint', cr.id, cr.constraint_date, cr.starts_at, cr.ends_at,
-             ct.name_he, null, null, cr.status::text
+             ct.name_he, null, null, cr.status::text, null
         from constraint_requests cr
         join constraint_types ct on ct.id = cr.constraint_type_id
        where cr.user_id = $1 and cr.deleted_at is null

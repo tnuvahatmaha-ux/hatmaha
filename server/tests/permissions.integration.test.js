@@ -81,7 +81,7 @@ describeDb('הרשאות — מקצה לקצה מול מסד אמיתי', () => 
     const res = await call('/api/permissions/catalog', { as: manager.id });
     expect(res.status).toBe(200);
     const { resources } = await res.json();
-    expect(resources).toHaveLength(18);
+    expect(resources).toHaveLength(19);
     expect(resources.map((r) => r.resource)).toContain('roster');
   });
 

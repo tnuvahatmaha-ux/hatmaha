@@ -20,7 +20,7 @@ export const ACTIONS = ['view', 'create', 'edit', 'delete', 'approve', 'publish'
 export const RESOURCES = [
   'users', 'implementers', 'mentors', 'sites', 'domains', 'activities',
   'availability', 'requests', 'rules', 'roster', 'teamSchedule', 'materials',
-  'updates', 'chat', 'reports', 'audit', 'permissions', 'settings',
+  'updates', 'chat', 'reports', 'audit', 'permissions', 'settings', 'skills',
 ];
 
 /** סיבות סירוב — מוחזרות ללקוח כדי שמסך "אין הרשאה" יוכל להסביר */

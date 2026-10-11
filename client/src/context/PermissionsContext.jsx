@@ -68,6 +68,7 @@ export function PermissionsProvider({ children }) {
       missingAssignments: state.me?.missingAssignments ?? [],
       // מנהל הטמעה אינו משובץ, ולכן אינו מגיש זמינות או אילוצים לעצמו
       submitsAvailability: state.me?.submitsAvailability ?? true,
+      missingMigrations: state.me?.missingMigrations ?? [],
       can,
       refresh,
       reload: load,

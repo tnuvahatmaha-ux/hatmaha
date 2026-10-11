@@ -85,6 +85,13 @@ rosterRouter.post(
   },
 );
 
+rosterRouter.patch(
+  '/assignments/:id/note',
+  requirePermission('roster', 'edit', assignmentScope),
+  validate({ params: idParam, body: z.object({ note: z.string().trim().max(500).nullish() }) }),
+  async (req, res) => res.json(await svc.setNote(req.user, req.params.id, req.body.note)),
+);
+
 rosterRouter.delete(
   '/assignments/:id',
   requirePermission('roster', 'delete', assignmentScope),

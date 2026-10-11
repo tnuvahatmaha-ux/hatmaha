@@ -29,6 +29,7 @@ import Reports from './pages/Reports.jsx';
 import Notifications from './pages/Notifications.jsx';
 import Profile from './pages/Profile.jsx';
 import Messages from './pages/Messages.jsx';
+import Skills from './pages/Skills.jsx';
 import Settings from './pages/settings/index.jsx';
 
 /**
@@ -63,6 +64,10 @@ export default function App() {
                 <Route path="profile" element={<Profile />} />
                 <Route path="notifications" element={<Notifications />} />
                 <Route path="messages" element={<Messages />} />
+                <Route
+                  path="skills"
+                  element={<RequirePermission resource="skills" action="view"><Skills /></RequirePermission>}
+                />
 
                 <Route
                   path="dashboard"

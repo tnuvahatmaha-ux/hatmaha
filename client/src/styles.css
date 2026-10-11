@@ -598,6 +598,8 @@ input[type='file'] { font: inherit; font-size: 13px; }
   padding: 0 1px; font-size: 13px; line-height: 1; color: var(--faint);
 }
 .roster-chip button:hover { color: var(--danger); }
+.roster-chip button.chip-name { color: inherit; font: inherit; font-weight: 500; padding: 0; }
+.roster-chip button.chip-name:hover { color: var(--primary); text-decoration: underline; }
 .roster-add {
   border: none; border-radius: 6px; background: transparent;
   font: inherit; font-size: 11.5px; cursor: pointer; padding: 3px;
@@ -783,3 +785,83 @@ input[type='file'] { font: inherit; font-size: 13px; }
   .panel { box-shadow: none; break-inside: avoid; border: 1px solid #ddd; }
   .main { padding: 0; }
 }
+
+/* --------------------------------------------------------------------------
+   צ׳אט קבוצתי — בסגנון iMessage
+   -------------------------------------------------------------------------- */
+.chat-layout { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: var(--space-4); align-items: start; }
+.chat-layout .panel { margin-block-end: 0; }
+.msg-item.active { background: var(--primary-ink); }
+.chat-avatar {
+  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center; background: var(--fill); color: var(--primary);
+}
+.chat-back { display: none; }
+.chat-conversation { display: flex; flex-direction: column; height: min(70vh, 720px); }
+.chat-conversation .panel-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.chat-messages {
+  flex: 1; overflow-y: auto; padding: 16px 20px;
+  display: flex; flex-direction: column; gap: 4px;
+  border-block-start: 1px solid var(--line-soft);
+}
+.bubble-row { display: flex; gap: 8px; align-items: flex-end; }
+.bubble-row.mine { flex-direction: row-reverse; }
+.bubble {
+  max-width: min(72%, 520px);
+  padding: 8px 12px 6px; border-radius: 18px;
+  background: var(--fill); color: var(--ink);
+  border-end-start-radius: 6px;
+}
+.bubble-row.mine .bubble {
+  background: var(--primary); color: #fff;
+  border-end-start-radius: 18px; border-end-end-radius: 6px;
+}
+.bubble-author { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-block-end: 1px; }
+.bubble-text { white-space: pre-wrap; word-break: break-word; font-size: 14.5px; line-height: 1.4; }
+.bubble-time { font-size: 10.5px; opacity: 0.6; text-align: end; margin-block-start: 2px; }
+.chat-compose {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 10px 14px; border-block-start: 1px solid var(--line-soft);
+}
+.chat-compose textarea { min-height: 38px; max-height: 140px; border-radius: 19px; resize: none; padding-block: 8px; }
+.chat-compose .btn-icon { min-width: 38px; min-height: 38px; color: #fff; }
+
+@media (max-width: 860px) {
+  .chat-layout { grid-template-columns: 1fr; }
+  .chat-layout[data-open='true'] .chat-list { display: none; }
+  .chat-layout[data-open='false'] .chat-pane { display: none; }
+  .chat-back { display: inline-flex; }
+  .chat-conversation { height: calc(100dvh - 240px); }
+}
+
+/* --------------------------------------------------------------------------
+   סקילומטר
+   -------------------------------------------------------------------------- */
+.skill-table { border-collapse: separate; border-spacing: 0; font-size: 13.5px; min-width: max-content; }
+.skill-table th, .skill-table td { padding: 6px 8px; border-block-end: 1px solid var(--line-soft); }
+.skill-table thead th {
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+  font-size: 12px; font-weight: 600; color: var(--muted); text-align: center; max-width: 120px;
+  white-space: normal; line-height: 1.25;
+}
+.skill-table th.sticky-name, .skill-table td.sticky-name {
+  position: sticky; inset-inline-start: 0; background: var(--surface); z-index: 2; text-align: start;
+  min-width: 170px; box-shadow: inset -1px 0 0 var(--line-soft);
+}
+.skill-picker { display: inline-flex; gap: 2px; }
+.skill-picker button {
+  width: 26px; height: 26px; border-radius: 7px; border: none;
+  background: var(--fill); color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; transition: transform 120ms var(--ease-out), background-color 120ms ease;
+}
+.skill-picker button:active { transform: scale(0.92); }
+.skill-picker button:disabled { cursor: default; }
+.skill-picker button[aria-pressed='true'].s1 { background: #ff3b30; color: #fff; }
+.skill-picker button[aria-pressed='true'].s2 { background: #ff9500; color: #fff; }
+.skill-picker button[aria-pressed='true'].s3 { background: #ffcc00; color: #1d1d1f; }
+.skill-picker button[aria-pressed='true'].s4 { background: #34c759; color: #fff; }
+.skill-na { color: var(--faint); text-align: center; }
+.score-pill { display: inline-block; min-width: 34px; text-align: center; padding: 1px 8px; border-radius: 999px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.score-pill.low { background: var(--danger-bg); color: var(--danger); }
+.score-pill.mid { background: var(--warn-bg); color: var(--warn); }
+.score-pill.high { background: var(--success-bg); color: var(--success); }

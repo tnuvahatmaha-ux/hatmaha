@@ -338,6 +338,36 @@ export async function unassign(actor, assignmentId, req) {
   });
 }
 
+/**
+ * הערה לעובד על שיבוץ. מותרת גם בסידור שפורסם — הטריגר במסד מאפשר שינוי
+ * של שדות ההערה בלבד. העובד רואה אותה בלו״ז שלו, ומקבל התראה אם הסידור פורסם.
+ */
+export async function setNote(actor, assignmentId, note) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const [row] = await tx.query(
+      `update roster_assignments ra
+          set note = nullif(btrim($2), ''), note_updated_at = now(), note_updated_by = $3
+        where ra.id = $1 and ra.deleted_at is null
+        returning ra.id, ra.note, ra.note_updated_at, ra.user_id,
+                  (select status::text from roster_versions v where v.id = ra.version_id) as version_status`,
+      [assignmentId, note ?? '', actor.userId],
+    );
+    if (!row) throw new AppError('E_NOT_FOUND', 'השיבוץ המבוקש לא נמצא');
+
+    if (row.version_status === 'published' && row.note) {
+      await notify(tx, {
+        typeCode: 'roster_changed',
+        recipientIds: [row.user_id],
+        title: 'נוספה הערה למשמרת שלך',
+        body: row.note,
+        entityType: 'roster_assignments',
+        entityId: row.id,
+      });
+    }
+    return { id: row.id, note: row.note, noteUpdatedAt: row.note_updated_at };
+  });
+}
+
 /* ───────────────────────── שכפול שבוע ───────────────────────── */
 
 /**
@@ -759,7 +789,7 @@ export async function mine(userId, { from, to }) {
   return query(
     `select ra.id, ra.assignment_date, ra.start_time, ra.end_time, ra.starts_at, ra.ends_at,
             l.name as location_name, s.name as site_name, st.name as shift_name,
-            d.name as domain_name, v.version_number
+            d.name as domain_name, v.version_number, ra.note
        from roster_assignments ra
        join roster_versions v on v.id = ra.version_id
        join sites s on s.id = ra.site_id

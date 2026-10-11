@@ -12,7 +12,7 @@ import { fmtTime, fmtDate, dayName, today, addDays, ROLE_NAMES, statusTone, STAT
  * המטלות והצוות. שיוך חסר מוצג בבירור בראש המסך, כפי ש-§7 דורש.
  */
 export default function Home() {
-  const { profile, role, sites, domains, mentors, missingAssignments, can, submitsAvailability } = usePermissions();
+  const { profile, role, sites, domains, mentors, missingAssignments, can, submitsAvailability, missingMigrations } = usePermissions();
   const approver = can('requests', 'approve');
 
   const from = today();
@@ -49,6 +49,13 @@ export default function Home() {
             בלי השיוכים האלה לא נוכל לשבץ אותך ולא תוכל/י להגיש זמינות.
             פנה/י למנהל ההטמעה.
           </div>
+        </Notice>
+      )}
+
+      {missingMigrations.length > 0 && (
+        <Notice tone="danger" icon="⚠" title="המסד לא עודכן — חלק מהמסכים לא יעבדו">
+          חסרות מיגרציות: {missingMigrations.join(', ')}. יש להריץ אותן ב-Supabase ← SQL Editor
+          (לפי הסדר, מתוך התיקייה supabase/migrations). פירוט ב-DEPLOY.md, "תחזוקה שוטפת".
         </Notice>
       )}
 
@@ -254,6 +261,7 @@ function ScheduleRow({ item, showDate }) {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="bold">{item.title}</div>
+        {item.note && <div className="small" style={{ color: 'var(--primary)' }}>הערה: {item.note}</div>}
         <div className="small muted">
           {showDate && `${dayName(item.entry_date)} ${fmtDate(item.entry_date)} · `}
           {[item.site_name, item.location_name].filter(Boolean).join(' · ')}

@@ -26,7 +26,47 @@ export async function allowedRecipients(principal) {
   );
 }
 
+/**
+ * הנמענים של הודעה לקבוצה: כל המשתמשים הפעילים המשויכים לתחום, לתת-התחום
+ * או לאתר (בלי מנהלים ובלי השולח). מדריך רשאי לשלוח רק לקבוצה שבתחומי
+ * האחריות שלו.
+ */
+export async function audienceRecipients(actor, audience, targetId) {
+  if (!isManager(actor)) {
+    const column = { domain: 'domain_id', sub_category: 'sub_category_id', site: 'site_id' }[audience];
+    const [cover] = await query(
+      `select count(*)::int as n from mentor_responsibilities
+        where mentor_user_id = $1 and deleted_at is null and span @> current_date
+          and (${column} = $2 or ${column} is null)`,
+      [actor.userId, targetId],
+    );
+    if (!cover.n) throw new AppError('E_FORBIDDEN', 'אפשר לשלוח רק לקבוצה שבתחומי האחריות שלך');
+  }
+
+  const rows = await query(
+    `select p.id, p.full_name from profiles p
+      where p.deleted_at is null and p.status = 'active' and p.id <> $1
+        and p.base_role <> 'manager'
+        and case $2
+              when 'domain' then exists (select 1 from user_domains ud
+                                          where ud.user_id = p.id and ud.domain_id = $3 and ud.deleted_at is null)
+              when 'sub_category' then exists (select 1 from user_sub_categories us
+                                          where us.user_id = p.id and us.sub_category_id = $3 and us.deleted_at is null)
+              when 'site' then exists (select 1 from site_assignments sa
+                                          where sa.user_id = p.id and sa.site_id = $3
+                                            and sa.deleted_at is null and sa.span @> current_date)
+              else false
+            end
+      order by p.full_name`,
+    [actor.userId, audience, targetId],
+  );
+  return rows;
+}
+
 export async function create(actor, input) {
+  const audience = input.audience ?? 'users';
+  if (audience !== 'users') return createForAudience(actor, input, audience);
+
   const allowed = await allowedRecipients(actor);
   const allowedIds = new Set(allowed.map((r) => r.id));
 
@@ -54,6 +94,28 @@ export async function create(actor, input) {
       await tx.query('insert into update_recipients (update_id, user_id) values ($1, $2)', [row.id, userId]);
     }
     return { id: row.id, recipients: recipientIds.length };
+  });
+}
+
+async function createForAudience(actor, input, audience) {
+  if (!input.targetId) throw new AppError('E_VALIDATION', 'יש לבחור תחום, תת-תחום או אתר');
+  const recipients = await audienceRecipients(actor, audience, input.targetId);
+  if (recipients.length === 0) throw new AppError('E_VALIDATION', 'אין משתמשים פעילים בקבוצה שנבחרה');
+
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const [row] = await tx.query(
+      `insert into updates (title, body, author_user_id, audience, requires_ack, status,
+                            domain_id, sub_category_id, site_id)
+       values ($1, $2, $3, $4::audience_type, $5, 'draft', $6, $7, $8) returning id`,
+      [input.title, input.body, actor.userId, audience, input.requiresAck ?? false,
+       audience === 'domain' ? input.targetId : null,
+       audience === 'sub_category' ? input.targetId : null,
+       audience === 'site' ? input.targetId : null],
+    );
+    for (const r of recipients) {
+      await tx.query('insert into update_recipients (update_id, user_id) values ($1, $2)', [row.id, r.id]);
+    }
+    return { id: row.id, recipients: recipients.length };
   });
 }
 

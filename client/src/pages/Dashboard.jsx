@@ -1,5 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { useApi } from '../lib/useApi.js';
+import { ScorePill } from './Skills.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
 import { Panel, StateView, Tag, Empty, Notice } from '../components/ui/index.jsx';
 import { fmtDate, fmtDateFull, fmtTime, today, addDays, weekStartOf, statusTone, STATUS_NAMES } from '../lib/format.js';
@@ -93,9 +95,11 @@ export default function Dashboard() {
           </Notice>
         )}
 
+        <SkillsCard sites={sites.data?.sites ?? []} />
+
         <div className="row" style={{ alignItems: 'flex-start', gap: 'var(--space-4)' }}>
           <div style={{ flex: '1 1 320px', minWidth: 0 }}>
-            <Panel title="Go Live קרוב" flush>
+            <Panel title="עלייה לאוויר קרובה" flush>
               {goLive.length === 0 ? (
                 <Empty icon="🚀" title="אין תאריכי עלייה לאוויר קרובים" />
               ) : (
@@ -181,5 +185,91 @@ export default function Dashboard() {
         </Panel>
       </StateView>
     </>
+  );
+}
+
+/**
+ * סקילומטר: אחוז ההשלמה של הסבב הפעיל, ממוצע לכל תחום, ומשתמשי הקצה
+ * המובילים ומי שזקוק לחיזוק — עם השוואה לסבב הקודם.
+ */
+function SkillsCard({ sites }) {
+  const [siteId, setSiteId] = useState('');
+  const active = sites.filter((s) => !s.is_archived);
+  useEffect(() => {
+    if (!siteId && active.length) setSiteId((active.find((s) => s.status_code !== 'training') ?? active[0]).id);
+  }, [active, siteId]);
+
+  const summary = useApi(siteId ? '/api/skills/summary' : null, { siteId });
+  const data = summary.data;
+
+  const PersonRow = ({ p }) => (
+    <tr>
+      <td data-label="שם" className="bold">{p.full_name}<div className="tiny muted">{p.domain_name}</div></td>
+      <td data-label="ממוצע"><ScorePill value={p.avg_score} /></td>
+      <td data-label="שינוי" className="tnum small">
+        {p.prev_avg == null ? '—'
+          : Number(p.avg_score) === Number(p.prev_avg) ? <span className="muted">=</span>
+          : <span style={{ color: Number(p.avg_score) > Number(p.prev_avg) ? 'var(--success)' : 'var(--danger)' }}>
+              {Number(p.avg_score) > Number(p.prev_avg) ? '▲' : '▼'} {Math.abs(p.avg_score - p.prev_avg).toFixed(1)}
+            </span>}
+      </td>
+      <td data-label="נושא חלש" className="small">{p.min_score < 4 ? p.weakest_topic : '—'}</td>
+    </tr>
+  );
+
+  return (
+    <Panel
+      title="סקילומטר"
+      subtitle={data?.round ? `${data.round.name} · ${data.completion}% הושלם` : 'רמת הידע של משתמשי הקצה'}
+      actions={
+        <>
+          {active.length > 1 && (
+            <select value={siteId} onChange={(e) => setSiteId(e.target.value)} aria-label="אתר לסקילומטר" style={{ width: 'auto' }}>
+              {active.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+          <Link to="/skills" className="btn btn-sm">לסקילומטר</Link>
+        </>
+      }
+    >
+      <StateView loading={summary.loading} error={summary.error} onRetry={summary.reload}
+        empty={!summary.loading && !data?.round}
+        emptyProps={{ icon: '📝', title: 'עדיין לא נפתח סבב סקילומטר באתר הזה' }}>
+        {data?.round && (
+          <>
+            <div className="progress" style={{ marginBlockEnd: 'var(--space-4)' }}>
+              <span style={{ width: `${data.completion}%` }} />
+            </div>
+            {data.domains.length > 0 && (
+              <div className="kpi-strip">
+                {data.domains.map((d) => (
+                  <div key={d.domain} className="kpi" style={{ cursor: 'default' }}>
+                    <div className="kpi-label">{d.domain} · {d.users} משתמשים</div>
+                    <div className="kpi-value">{d.avg.toFixed(1)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="row" style={{ alignItems: 'flex-start', gap: 'var(--space-4)' }}>
+              {[['מובילים', data.top], ['זקוקים לחיזוק', data.struggling]].map(([title, list]) => (
+                <div key={title} style={{ flex: '1 1 300px', minWidth: 0 }}>
+                  <h3 style={{ marginBlockEnd: 'var(--space-2)' }}>{title}</h3>
+                  {list.length === 0 ? (
+                    <p className="small muted">אין עדיין נתונים</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="table table-cards">
+                        <thead><tr><th>שם</th><th>ממוצע</th><th>שינוי</th><th>נושא חלש</th></tr></thead>
+                        <tbody>{list.map((p) => <PersonRow key={p.end_user_id} p={p} />)}</tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </StateView>
+    </Panel>
   );
 }

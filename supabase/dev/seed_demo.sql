@@ -54,6 +54,7 @@ declare
   a_id uuid; v_pub uuid; v_draft uuid; decl uuid; cr uuid; ev uuid;
   tr uuid; ti1 uuid; ti2 uuid; ti3 uuid; ti4 uuid;
   i int;
+  sk_round uuid; sk_prev uuid; grp uuid;
 begin
   nws := ws + 7;
 
@@ -362,6 +363,63 @@ begin
   values ('מינימום משמרות בשבוע', 'submit', 'availability', 'minShiftsPerCategory',
           '{"morning": 4, "afternoon": 4, "night": 2, "weekend": 1}'::jsonb, 'warning', 20,
           'לא סומנו מספיק משמרות זמינות', 'global', 'דוגמה — ניתן לשנות ב: הגדרות ← חוקיות');
+
+  -- ── סקילומטר: משתמשי קצה במרכז רפואי צפון, נושאים, וסבב פתוח עם ציונים חלקיים ──
+  insert into end_users (site_id, full_name, employee_no, department, role_title, domain_id, sub_category_id)
+  select s_north, n.name, (1000 + n.i)::text, n.dept, n.role, d_clin,
+         case when n.role = 'רופא/ה' then sc_doc else sc_nurse end
+    from (values
+      (1, 'רונית כהן', 'פנימית א׳', 'אח/ות'), (2, 'יעל לוי', 'פנימית א׳', 'אח/ות'),
+      (3, 'משה פרידמן', 'פנימית א׳', 'רופא/ה'), (4, 'דנה אזולאי', 'פנימית א׳', 'אח/ות'),
+      (5, 'אבי מזרחי', 'מיון', 'רופא/ה'), (6, 'שרון ביטון', 'מיון', 'אח/ות'),
+      (7, 'מיכל גבאי', 'מיון', 'אח/ות'), (8, 'יוסף חדד', 'מיון', 'רופא/ה'),
+      (9, 'ליאת שמעוני', 'פנימית א׳', 'אח/ות'), (10, 'עידו נחום', 'מיון', 'אח/ות'),
+      (11, 'הילה אברהם', 'פנימית א׳', 'אח/ות'), (12, 'רועי בן דוד', 'מיון', 'רופא/ה')
+    ) as n(i, name, dept, role);
+
+  insert into skill_topics (domain_id, sub_category_id, name, display_order) values
+    (d_clin, null, 'כניסה וניווט במערכת', 10),
+    (d_clin, null, 'חיפוש מטופל', 20),
+    (d_clin, sc_nurse, 'תיעוד סימנים חיוניים', 30),
+    (d_clin, sc_nurse, 'מתן תרופות', 40),
+    (d_clin, sc_doc, 'רישום הוראות רפואיות', 50),
+    (d_clin, sc_doc, 'כתיבת סיכום אשפוז', 60),
+    (d_admin, null, 'קבלת מטופל', 10),
+    (d_admin, null, 'הפקת חשבונית', 20);
+
+  insert into skill_rounds (site_id, name, round_no, opens_on, closes_on, status)
+  values (s_north, 'סבב 1 — שבוע ראשון', 1, today - 14, today - 8, 'closed') returning id into sk_prev;
+  insert into skill_rounds (site_id, name, round_no, opens_on, closes_on, status)
+  values (s_north, 'סבב 2 — שבוע שלישי', 2, today - 2, today + 5, 'open') returning id into sk_round;
+
+  insert into skill_round_topics (round_id, topic_id)
+  select r.id, t.id from skill_topics t cross join (values (sk_prev), (sk_round)) as r(id)
+   where t.domain_id = d_clin;
+
+  -- ציונים: בסבב הקודם נמוכים יותר; בסבב הנוכחי כ-70% מולאו
+  insert into skill_scores (round_id, end_user_id, topic_id, score, rated_by)
+  select r.round_id, eu.id, t.id,
+         least(4, greatest(1, ((abs(hashtext(eu.full_name || t.name)) % 4) + 1) - r.penalty)),
+         u_noa
+    from end_users eu
+    join skill_topics t on t.domain_id = eu.domain_id
+                       and (t.sub_category_id is null or t.sub_category_id = eu.sub_category_id)
+   cross join (values (sk_prev, 1), (sk_round, 0)) as r(round_id, penalty)
+   where eu.site_id = s_north
+     and (r.round_id = sk_prev or abs(hashtext(eu.full_name || t.name || 'x')) % 10 < 7);
+
+  insert into skill_user_notes (round_id, end_user_id, note, updated_by)
+  select sk_round, id, 'מתקשה בתיעוד סימנים חיוניים — נקבע תרגול נוסף ביום ראשון', u_noa
+    from end_users where site_id = s_north and full_name = 'רונית כהן';
+
+  -- ── צ׳אט: קבוצת הסיעוד של יוסי ──
+  insert into chat_groups (name, kind, sub_category_id, created_by)
+  values ('צוות סיעוד', 'sub_category', sc_nurse, u_yossi) returning id into grp;
+  perform app.sync_group_members(grp);
+  insert into chat_messages (group_id, author_user_id, body, created_at) values
+    (grp, u_yossi, 'בוקר טוב לכולם! מחר תרגול על מתן תרופות בחדר ההדרכה ב-10:00', now() - interval '3 hours'),
+    (grp, u_noa, 'מעולה, אני אהיה', now() - interval '2 hours'),
+    (grp, u_ori, 'אפשר לצרף גם את האחיות מהמיון?', now() - interval '1 hour');
 
   raise notice 'נתוני הדמו נטענו: 8 משתמשים, 2 אתרים, סידור שפורסם וטיוטה, בקשות וחריגה בתור';
 end $$;

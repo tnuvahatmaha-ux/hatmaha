@@ -88,6 +88,11 @@ const RESPONSES = {
     { id: 'm1', title: 'נוהל חדש', body: 'נא לקרוא', requires_ack: true, read_at: null, acknowledged_at: null, author_name: 'יוסי לוי', published_at: '2026-11-14T08:00:00Z', attachment_count: 1 },
   ] },
   '/api/updates/sent': { updates: [], storageEnabled: false },
+  '/api/chat/groups': { groups: [{ id: 'g1', name: 'צוות סיעוד', kind: 'domain', member_count: 4, unread: 2, last_body: 'בוקר טוב', last_author: 'יוסי לוי', last_at: '2026-11-14T08:00:00Z' }] },
+  '/api/skills/rounds': { rounds: [{ id: 'sr1', name: 'סבב 1', status: 'open', topic_ids: ['t1'], score_count: 1, opens_on: null, closes_on: null }] },
+  '/api/skills/summary': { round: null, rounds: [] },
+  '/api/skills/topics': { topics: [] },
+  '/api/skills/end-users': { endUsers: [] },
   '/api/updates/recipients': { recipients: [], storageEnabled: false },
   '/api/roster/versions': { versions: [] },
   '/api/roster/draft': { version: { id: 'v1', status: 'draft', version_number: 1, week_start: '2026-11-15', site_id: 's1', row_version: 1 } },
@@ -114,6 +119,18 @@ const matchResponse = (path) => {
           shiftTypes: [{ id: 'st1', location_id: 'l1', name: 'בוקר מיון', start_time: '08:00:00', end_time: '16:00:00', crosses_midnight: false, is_mandatory: true, required_staff: 1, is_active: true, row_version: 1 }] },
         { id: 'l2', name: 'אגף ריק', is_active: true, location_type_id: null, row_version: 1, shiftTypes: [] },
       ],
+    };
+  }
+  if (path.match(/^\/api\/skills\/rounds\/[^/]+\/sheet$/)) {
+    return {
+      round: { id: 'sr1', name: 'סבב 1', status: 'open' },
+      domains: [{ id: 'd1', name: 'מערכות קליניות' }],
+      topics: [{ id: 't1', domain_id: 'd1', sub_category_id: null, name: 'קבלת מטופל' }],
+      users: [{ id: 'eu1', full_name: 'רונית אחות', domain_id: 'd1', domain_name: 'מערכות קליניות', sub_category_id: null }],
+      scores: [{ end_user_id: 'eu1', topic_id: 't1', score: 2 }],
+      notes: [],
+      progress: { filled: 1, total: 1 },
+      canEdit: true,
     };
   }
   if (path.includes('/board')) {
@@ -174,6 +191,7 @@ const SCREENS = [
   ['אתרים', () => import('../src/pages/Sites.jsx')],
   ['אנשים', () => import('../src/pages/Implementers.jsx')],
   ['הודעות', () => import('../src/pages/Messages.jsx')],
+  ['סקילומטר', () => import('../src/pages/Skills.jsx')],
   ['דוחות', () => import('../src/pages/Reports.jsx')],
   ['התראות', () => import('../src/pages/Notifications.jsx')],
   ['פרופיל', () => import('../src/pages/Profile.jsx')],
@@ -313,5 +331,24 @@ describe('הודעות לצוות', () => {
     renderScreen(Messages);
     expect(await screen.findByText('נוהל חדש')).toBeTruthy();
     expect(screen.getByText('ממתין לאישור קריאה')).toBeTruthy();
+  });
+});
+
+describe('סקילומטר וקבוצות', () => {
+  afterEach(cleanup);
+
+  it('טבלת הסקילומטר מציגה את הציון שנבחר', async () => {
+    const { default: Skills } = await import('../src/pages/Skills.jsx');
+    renderScreen(Skills);
+    const group = await screen.findByRole('group', { name: 'רונית אחות — קבלת מטופל' });
+    expect(group.querySelector('[aria-pressed="true"]').textContent).toBe('2');
+  });
+
+  it('לשונית הקבוצות מציגה קבוצה עם מונה הודעות שלא נקראו', async () => {
+    const { default: Messages } = await import('../src/pages/Messages.jsx');
+    renderScreen(Messages);
+    fireEvent.click(await screen.findByRole('button', { name: 'קבוצות' }));
+    expect(await screen.findByText('צוות סיעוד')).toBeTruthy();
+    expect(screen.getByLabelText('2 הודעות שלא נקראו')).toBeTruthy();
   });
 });
