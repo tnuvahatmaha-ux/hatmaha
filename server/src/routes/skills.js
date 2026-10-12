@@ -19,6 +19,10 @@ const roundScope = async (req) => {
   const [row] = await query('select site_id from skill_rounds where id = $1', [req.params.id]);
   return { siteId: row?.site_id };
 };
+const endUserScope = async (req) => {
+  const [row] = await query('select site_id from end_users where id = $1', [req.params.id]);
+  return { siteId: row?.site_id };
+};
 const querySite = (req) => ({ siteId: req.query.siteId });
 const bodySite = (req) => ({ siteId: req.body?.siteId });
 
@@ -95,6 +99,13 @@ skillsRouter.post(
     res.status(req.body.id ? 200 : 201).json({ endUser: await svc.saveEndUser(req.user, req.body.siteId, req.body) }),
 );
 
+skillsRouter.delete(
+  '/end-users/:id',
+  requirePermission('skills', 'manage', endUserScope),
+  validate({ params: idParam }),
+  async (req, res) => res.json(await svc.deleteEndUser(req.user, req.params.id)),
+);
+
 skillsRouter.post(
   '/end-users/import',
   requirePermission('skills', 'manage', bodySite),
@@ -146,6 +157,13 @@ skillsRouter.post(
   async (req, res) => res.status(req.body.id ? 200 : 201).json({ round: await svc.saveRound(req.user, req.body) }),
 );
 
+skillsRouter.post(
+  '/rounds/:id/duplicate',
+  requirePermission('skills', 'manage', roundScope),
+  validate({ params: idParam, body: z.object({ name: z.string().trim().max(120).nullish() }) }),
+  async (req, res) => res.status(201).json({ round: await svc.duplicateRound(req.user, req.params.id, req.body) }),
+);
+
 skillsRouter.get(
   '/rounds/:id/sheet',
   requirePermission('skills', 'view', roundScope),
@@ -189,6 +207,32 @@ skillsRouter.get(
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="skillometer.xlsx"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+    res.send(Buffer.from(buffer));
+  },
+);
+
+/* ── התקדמות לאורך הסבבים ── */
+const progressQuery = z.object({ siteId: uuid, domainId: uuid.optional() });
+
+skillsRouter.get(
+  '/progress',
+  requirePermission('skills', 'view', querySite),
+  validate({ query: progressQuery }),
+  async (req, res) => res.json(await svc.progress(req.user, req.validQuery)),
+);
+
+skillsRouter.get(
+  '/progress.xlsx',
+  requirePermission('skills', 'export', querySite),
+  validate({ query: progressQuery }),
+  async (req, res) => {
+    const { buffer, filename } = await svc.exportProgress(req.user, req.validQuery);
+    await recordExport(req, { entityType: 'skill_rounds', filters: req.validQuery, rowCount: null });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="skillometer-progress.xlsx"; filename*=UTF-8''${encodeURIComponent(filename)}`,
     );
     res.send(Buffer.from(buffer));
   },

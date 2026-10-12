@@ -1,5 +1,6 @@
 import { toInstants, weekStartOf, addDays, overlaps } from '../lib/time.js';
 import { siteWindows, countAvailable } from '../services/availabilityWindows.js';
+import { userRotation } from '../services/rotation.js';
 
 /**
  * טעינת העובדות שהחוקים נבדקים מולן — בסבב אחד, לפני הערכת החוקים.
@@ -156,18 +157,25 @@ export async function loadFacts(tx, ctx, needed) {
 /** ספירת המשמרות שסומנו "זמין" בהצהרה הנבדקת, לפי סוג ובסוף השבוע */
 async function loadAvailabilityCounts(tx, ctx) {
   const [decl] = await tx.query(
-    'select site_id, week_start from availability_declarations where id = $1',
+    'select user_id, site_id, week_start::text as week_start from availability_declarations where id = $1',
     [ctx.subjectId],
   );
   if (!decl) return null;
-  const [cells, windows] = await Promise.all([
+  const [cells, windows, rotation] = await Promise.all([
     tx.query(
       'select cell_date, start_time, end_time from availability_cells where declaration_id = $1',
       [ctx.subjectId],
     ),
     siteWindows(tx.query, decl.site_id, decl.week_start),
+    userRotation(tx.query, decl.user_id, decl.site_id, decl.week_start),
   ]);
-  return countAvailable({ cells, windows });
+  const counts = countAvailable({ cells, windows });
+  // מטמיע בסבב אינו נדרש בסוגי המשמרות שאינם שלו השבוע
+  if (rotation) {
+    const inCycles = new Set(rotation.locations.flatMap((l) => l.cycle));
+    counts.exempt = [...inCycles].filter((c) => !rotation.categories.includes(c));
+  }
+  return counts;
 }
 
 /**

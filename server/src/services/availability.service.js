@@ -6,6 +6,7 @@ import { hhmm, windowKey, siteWindows, sitePhases, countAvailable } from './avai
 import { evaluateAndExecute } from '../rules/exceptions.js';
 import { registerAction } from '../rules/actions.js';
 import { notify } from '../notifications/service.js';
+import { userRotation, CATEGORY_NAMES } from './rotation.js';
 
 /**
  * הצהרת זמינות שבועית — מטריצת יום × חלון שעות.
@@ -75,9 +76,13 @@ export async function window(principal, siteId) {
         )
       : null;
 
-  const [windows, phases] = site
-    ? await Promise.all([siteWindows(query, site, weekStart), sitePhases(query, site, weekStart)])
-    : [[], {}];
+  const [windows, phases, rotation] = site
+    ? await Promise.all([
+        siteWindows(query, site, weekStart),
+        sitePhases(query, site, weekStart),
+        userRotation(query, principal.userId, site, weekStart),
+      ])
+    : [[], {}, null];
 
   return {
     siteId: site,
@@ -86,6 +91,7 @@ export async function window(principal, siteId) {
     days: weekDays(weekStart),
     windows,
     phases,
+    rotation: rotation && { ...rotation, exempt: rotationExempt(rotation) },
     minimums: site ? await minimumsFor(principal.userId, site) : null,
     limits: {
       maxCannot: row?.availability_max_cannot ?? 3,
@@ -94,6 +100,38 @@ export async function window(principal, siteId) {
     deadline: deadline?.toISOString() ?? null,
     isOpen: !deadline || deadline.getTime() > Date.now(),
   };
+}
+
+/** סוגי המשמרות שמטמיע בסבב אינו נדרש להיות זמין בהם השבוע */
+export function rotationExempt(rotation) {
+  if (!rotation) return [];
+  const inCycles = new Set(rotation.locations.flatMap((l) => l.cycle));
+  return [...inCycles].filter((c) => !rotation.categories.includes(c));
+}
+
+/**
+ * מטמיע בסבב חייב להיות זמין בכל המשמרות של הסוג שלו השבוע, ואינו נדרש
+ * בסוגים האחרים שבסבב — תאים שסומנו בהם אינם נשמרים.
+ */
+function applyRotation(cells, windows, rotation) {
+  if (!rotation) return cells;
+  const exempt = new Set(rotationExempt(rotation));
+  const byKey = new Map(windows.map((w) => [w.key, w]));
+  const kept = [];
+  for (const cell of cells) {
+    const win = byKey.get(windowKey(cell.startTime, cell.endTime));
+    if (!win || cell.value === 'can') { kept.push(cell); continue; }
+    if (exempt.has(win.category)) continue;
+    if (rotation.categories.includes(win.category)) {
+      throw new AppError(
+        'E_VALIDATION',
+        `השבוע את/ה בסבב ${CATEGORY_NAMES[win.category]} — יש להיות זמין/ה בכל משמרות ה${CATEGORY_NAMES[win.category]}. ` +
+          'להיעדרות מלאה יש להגיש בקשת אילוץ.',
+      );
+    }
+    kept.push(cell);
+  }
+  return kept;
 }
 
 /** הצהרות של משתמש, החדשה ראשונה, כולל גרסאות קודמות */
@@ -187,10 +225,15 @@ export async function saveDraft(actor, input) {
       );
     }
 
+    const rotation = await userRotation(tx.query, userId, site.id, weekStart);
+    const cells = rotation
+      ? applyRotation(input.cells ?? [], await siteWindows(tx.query, site.id, weekStart), rotation)
+      : (input.cells ?? []);
+
     // המטריצה נערכת כיחידה אחת, ולכן התאים מוחלפים במלואם
     await tx.query('delete from availability_cells where declaration_id = $1', [declarationId]);
 
-    for (const cell of input.cells ?? []) {
+    for (const cell of cells) {
       if (cell.value === 'can') continue; // "יכול" הוא ברירת המחדל — לא נשמר
       await tx.query(
         `insert into availability_cells (declaration_id, cell_date, start_time, end_time, value, note)

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { uuid, dateStr, timeStr, name, optionalText } from './common.schema.js';
 
+const shiftCategory = z.enum(['morning', 'afternoon', 'night']);
+
 const hoursOrder = (v) =>
   !v.openTime || !v.closeTime || v.closeTime > v.openTime;
 
@@ -64,6 +66,26 @@ export const locationBody = z.object({
   capacity: z.coerce.number().int().min(1).max(9999).nullish(),
   isActive: z.boolean().optional(),
   periods: z.array(z.enum(['training', 'golive', 'support'])).min(1, 'יש לבחור לפחות שלב אחד').max(3).optional(),
+  // סדר הסבב השבועי. null = המיקום אינו עובד בסבב
+  rotationCycle: z
+    .array(shiftCategory)
+    .min(2, 'סבב שבועי צריך לפחות שני סוגי משמרת')
+    .max(3)
+    .refine((list) => new Set(list).size === list.length, 'סוג משמרת מופיע פעמיים בסבב')
+    .nullish(),
+});
+
+export const rotationsBody = z.object({
+  rotations: z
+    .array(
+      z.object({
+        userId: uuid,
+        locationId: uuid,
+        anchorWeek: dateStr,
+        anchorCategory: shiftCategory,
+      }),
+    )
+    .max(500),
 });
 
 export const copyDomainBody = z.object({

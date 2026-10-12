@@ -1,8 +1,8 @@
-import { MapPin, MessageSquareText } from 'lucide-react';
+import { Clock, MapPin, MessageSquareText } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi, useAction } from '../lib/useApi.js';
-import { post, patch, del, download, newIdempotencyKey } from '../lib/api.js';
+import { post, put, patch, del, download, newIdempotencyKey } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { usePermissions } from '../context/PermissionsContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
@@ -373,6 +373,7 @@ function LocationRow({ location, board, editable, onChanged }) {
 
 const AVAIL_RANK = { can: 0, prefer_not: 1, cannot: 2 };
 const PHASE_NAMES = { training: 'הכשרה', golive: 'עלייה לאוויר', support: 'ליווי' };
+const CATEGORY_NAMES = { morning: 'בוקר', afternoon: 'צהריים', night: 'לילה' };
 
 function Slot({ board, location, date, shift, editable, onChanged }) {
   const toast = useToast();
@@ -380,14 +381,21 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
   // הערה לעובד מותרת גם בסידור שפורסם — היא לא משנה את השיבוץ עצמו
   const canNote = can('roster', 'edit');
   const [noteFor, setNoteFor] = useState(null);
+  const [hoursOpen, setHoursOpen] = useState(false);
 
   const inCell = board.assignments.filter(
     (a) => a.location_id === location.id && a.assignment_date === date && a.shift_type_id === shift.id,
   );
 
+  // שינוי שעות נקודתי של המשמרת ביום הזה
+  const override = (board.overrides ?? []).find((o) => o.shift_type_id === shift.id && o.override_date === date);
+  const cellStart = override?.start_time ?? shift.start_time;
+  const cellEnd = override?.end_time ?? shift.end_time;
+  const customHours = (a) => fmtClock(a.start_time) !== fmtClock(cellStart) || fmtClock(a.end_time) !== fmtClock(cellEnd);
+
   /** סימון הזמינות של אדם למשמרת הזו — זה מה שמונע שיבוץ שגוי */
   const flagsFor = (userId) => {
-    const shiftRange = localRange(date, shift.start_time, shift.end_time);
+    const shiftRange = localRange(date, cellStart, cellEnd);
     const declaration = board.declarations?.find((d) => d.user_id === userId);
 
     // הערך המחמיר מבין חלונות הזמינות שחופפים למשמרת
@@ -403,6 +411,13 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
     );
 
     const flags = [];
+
+    // סבב שבועי: במיקום שעובד שבוע־שבוע, המטמיע משובץ רק בסוג המשמרת שלו השבוע
+    const rotation = board.rotations?.[userId]?.locations.find((l) => l.locationId === location.id);
+    if (rotation && shift.category && rotation.category !== shift.category) {
+      flags.push({ severity: 'warning', label: `🔄 בסבב ${CATEGORY_NAMES[rotation.category]} השבוע` });
+    }
+
     if (blocked) {
       flags.push({
         severity: blocked.status === 'approved' ? 'blocking' : 'warning',
@@ -467,7 +482,20 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
           {shift.name}
           {shift.is_mandatory && <span className="mandatory-dot" title="משמרת חובה" />}
         </span>
-        <span className="tnum">{fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}</span>
+        {editable ? (
+          <button type="button" className={`roster-hours tnum${override ? ' changed' : ''}`} onClick={() => setHoursOpen(true)}
+            title={override ? `השעות שונו ליום הזה (במקום ${fmtClock(shift.start_time)}–${fmtClock(shift.end_time)})${override.note ? ` · ${override.note}` : ''}` : 'שינוי שעות ליום הזה'}
+            aria-label={`שעות ${shift.name} ב${dayName(date)}: ${fmtClock(cellStart)}–${fmtClock(cellEnd)}. לחיצה לשינוי`}>
+            {override && <Clock size={11} aria-hidden="true" />}
+            {fmtClock(cellStart)}–{fmtClock(cellEnd)}
+          </button>
+        ) : (
+          <span className={`roster-hours tnum${override ? ' changed' : ''}`}
+            title={override ? `השעות שונו ליום הזה (במקום ${fmtClock(shift.start_time)}–${fmtClock(shift.end_time)})` : undefined}>
+            {override && <Clock size={11} aria-hidden="true" />}
+            {fmtClock(cellStart)}–{fmtClock(cellEnd)}
+          </span>
+        )}
       </div>
 
       {inCell.map((assignment) => {
@@ -484,6 +512,9 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
                 {shortName(assignment.user_name)}
               </button>
             ) : shortName(assignment.user_name)}
+            {customHours(assignment) && (
+              <span className="tiny tnum" title="שעות אישיות">{fmtClock(assignment.start_time)}–{fmtClock(assignment.end_time)}</span>
+            )}
             {assignment.note && <MessageSquareText size={12} aria-label="יש הערה" style={{ color: 'var(--primary)' }} />}
             {issue && <span aria-hidden="true">⚠</span>}
             {editable && (
@@ -526,22 +557,58 @@ function Slot({ board, location, date, shift, editable, onChanged }) {
           assignment={noteFor}
           shift={shift}
           date={date}
+          cellHours={{ start: cellStart, end: cellEnd }}
+          editableHours={editable}
           onClose={() => setNoteFor(null)}
           onSaved={() => { setNoteFor(null); onChanged(); }}
+        />
+      )}
+
+      {hoursOpen && (
+        <ShiftHoursDialog
+          versionId={board.version.id}
+          shift={shift}
+          location={location}
+          date={date}
+          override={override}
+          onClose={() => setHoursOpen(false)}
+          onSaved={() => { setHoursOpen(false); onChanged(); }}
         />
       )}
     </div>
   );
 }
 
-/** הערה לעובד על משמרת מסוימת — העובד רואה אותה בלו״ז שלו */
-function AssignmentNote({ assignment, shift, date, onClose, onSaved }) {
+/** שינוי שעות של משמרת ביום אחד — חל על כל מי שמשובץ בה בשעות התא */
+function ShiftHoursDialog({ versionId, shift, location, date, override, onClose, onSaved }) {
   const toast = useToast();
-  const [note, setNote] = useState(assignment.note ?? '');
+  const [form, setForm] = useState({
+    startTime: fmtClock(override?.start_time ?? shift.start_time),
+    endTime: fmtClock(override?.end_time ?? shift.end_time),
+    note: override?.note ?? '',
+  });
+
+  const report = (r, what) => {
+    const moved = r.updated ? ` · ${r.updated} שיבוצים עודכנו` : '';
+    toast.success(`${what}${moved}`);
+    if (r.skipped?.length) toast.warn(`לא עודכנו בגלל חפיפה עם שיבוץ אחר: ${r.skipped.join(', ')}`);
+  };
+
   const save = useAction(
     async () => {
-      await patch(`/api/roster/assignments/${assignment.id}/note`, { note });
-      toast.success(note.trim() ? 'ההערה נשמרה' : 'ההערה הוסרה');
+      const r = await put(`/api/roster/versions/${versionId}/shift-overrides`, {
+        shiftTypeId: shift.id, date, startTime: form.startTime, endTime: form.endTime, note: form.note.trim() || null,
+      });
+      report(r, 'השעות עודכנו ליום הזה');
+      onSaved();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const reset = useAction(
+    async () => {
+      const r = await del(`/api/roster/versions/${versionId}/shift-overrides/${override.id}`);
+      report(r, 'המשמרת חזרה לשעות הרגילות');
       onSaved();
     },
     { onError: (err) => toast.error(err) },
@@ -549,7 +616,81 @@ function AssignmentNote({ assignment, shift, date, onClose, onSaved }) {
 
   return (
     <Modal
-      title={`הערה ל${assignment.user_name}`}
+      title={`שעות ${shift.name} · ${location.name}`}
+      onClose={onClose}
+      width={460}
+      footer={
+        <>
+          <button type="button" className="btn btn-primary" onClick={() => save.run()} disabled={save.busy || !form.startTime || !form.endTime}>
+            {save.busy ? 'שומר…' : 'שמירה'}
+          </button>
+          {override && (
+            <button type="button" className="btn" onClick={() => reset.run()} disabled={reset.busy}>
+              חזרה לשעות הרגילות
+            </button>
+          )}
+          <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>
+        </>
+      }
+    >
+      <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>
+        {dayName(date)} {fmtDate(date)} בלבד. השעות הרגילות: {fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}.
+        מי שמשובץ במשמרת יעבור לשעות החדשות; לשינוי של מטמיע אחד — לחצו על השם שלו.
+      </p>
+      <div className="grid grid-2">
+        <Field label="התחלה" required>
+          {(props) => <input {...props} type="time" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} />}
+        </Field>
+        <Field label="סיום" required error={save.fieldErrors.endTime}>
+          {(props) => <input {...props} type="time" value={form.endTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} />}
+        </Field>
+      </div>
+      <Field label="סיבה" hint="אופציונלי — מוצג בריחוף על השעות">
+        {(props) => <input {...props} type="text" maxLength={300} value={form.note}
+          placeholder="למשל: הדרכת בוקר לפני המשמרת" onChange={(e) => setForm({ ...form, note: e.target.value })} />}
+      </Field>
+    </Modal>
+  );
+}
+
+/**
+ * הערה לעובד על משמרת מסוימת — העובד רואה אותה בלו״ז שלו.
+ * בטיוטה אפשר גם לשנות לו את השעות במשמרת הזו בלבד ("להגיע שעה מוקדם").
+ */
+function AssignmentNote({ assignment, shift, date, cellHours, editableHours, onClose, onSaved }) {
+  const toast = useToast();
+  const [note, setNote] = useState(assignment.note ?? '');
+  const [hours, setHours] = useState({ start: fmtClock(assignment.start_time), end: fmtClock(assignment.end_time) });
+  const original = { start: fmtClock(assignment.start_time), end: fmtClock(assignment.end_time) };
+  const isCustom = original.start !== fmtClock(cellHours.start) || original.end !== fmtClock(cellHours.end);
+  const hoursChanged = hours.start !== original.start || hours.end !== original.end;
+
+  const save = useAction(
+    async () => {
+      if (editableHours && hoursChanged) {
+        await patch(`/api/roster/assignments/${assignment.id}/hours`, { startTime: hours.start, endTime: hours.end });
+      }
+      if (note !== (assignment.note ?? '')) {
+        await patch(`/api/roster/assignments/${assignment.id}/note`, { note });
+      }
+      toast.success('נשמר');
+      onSaved();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const resetHours = useAction(
+    async () => {
+      await patch(`/api/roster/assignments/${assignment.id}/hours`, { startTime: null, endTime: null });
+      toast.success('השעות חזרו לשעות המשמרת');
+      onSaved();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <Modal
+      title={editableHours ? `${assignment.user_name} — שעות והערה` : `הערה ל${assignment.user_name}`}
       onClose={onClose}
       width={460}
       footer={
@@ -562,8 +703,24 @@ function AssignmentNote({ assignment, shift, date, onClose, onSaved }) {
       }
     >
       <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>
-        {shift.name} · {dayName(date)} {fmtDate(date)} · {fmtClock(shift.start_time)}–{fmtClock(shift.end_time)}
+        {shift.name} · {dayName(date)} {fmtDate(date)} · {fmtClock(cellHours.start)}–{fmtClock(cellHours.end)}
       </p>
+      {editableHours && (
+        <div className="grid grid-2">
+          <Field label="שעת התחלה אישית" hint={isCustom ? 'שונו אישית' : 'כמו המשמרת'}>
+            {(props) => <input {...props} type="time" value={hours.start} onChange={(e) => setHours({ ...hours, start: e.target.value })} />}
+          </Field>
+          <Field label="שעת סיום אישית">
+            {(props) => <input {...props} type="time" value={hours.end} onChange={(e) => setHours({ ...hours, end: e.target.value })} />}
+          </Field>
+        </div>
+      )}
+      {editableHours && isCustom && (
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => resetHours.run()} disabled={resetHours.busy}
+          style={{ marginBlockEnd: 'var(--space-3)' }}>
+          חזרה לשעות המשמרת
+        </button>
+      )}
       <Field label="הערה לעובד" hint="העובד יראה אותה בלו״ז שלו. אם הסידור כבר פורסם — הוא יקבל התראה">
         {(props) => (
           <textarea {...props} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)}

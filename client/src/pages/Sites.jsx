@@ -235,6 +235,10 @@ function SiteDetail({ siteId }) {
             )}
           </Panel>
 
+          {data.locations.some((l) => l.rotation_cycle) && (
+            <RotationsPanel siteId={siteId} locations={data.locations.filter((l) => l.rotation_cycle)} />
+          )}
+
           {copyDomain && (
             <CopyDomainShifts
               siteId={siteId}
@@ -268,6 +272,127 @@ function SiteDetail({ siteId }) {
         </>
       )}
     </StateView>
+  );
+}
+
+/**
+ * המטמיעים שעובדים בסבב שבועי. לכל אחד שבוע עוגן וסוג המשמרת שלו באותו שבוע;
+ * הסוג של שבוע אחר נגזר מהסידור שפורסם לפניו, ובהיעדרו — מהעוגן.
+ */
+function RotationsPanel({ siteId, locations }) {
+  const toast = useToast();
+  const data = useApi(`/api/sites/${siteId}/rotations`);
+  const people = useApi('/api/users', { siteId, status: 'active', limit: 300 });
+  const [rows, setRows] = useState(null);
+
+  useEffect(() => {
+    if (data.data) {
+      setRows(data.data.rotations.map((r) => ({
+        userId: r.user_id, locationId: r.location_id, anchorWeek: r.anchor_week, anchorCategory: r.anchor_category,
+        thisWeek: r.thisWeek, nextWeek: r.nextWeek,
+      })));
+    }
+  }, [data.data]);
+
+  const implementers = (people.data?.users ?? []).filter((u) => ['implementer', 'lead'].includes(u.base_role));
+  const cycleOf = (locationId) => locations.find((l) => l.id === locationId)?.rotation_cycle ?? [];
+  const dirty = rows && data.data && JSON.stringify(rows.map(strip)) !== JSON.stringify(data.data.rotations.map((r) => strip({
+    userId: r.user_id, locationId: r.location_id, anchorWeek: r.anchor_week, anchorCategory: r.anchor_category,
+  })));
+
+  const save = useAction(
+    async () => {
+      const result = await put(`/api/sites/${siteId}/rotations`, {
+        rotations: rows.filter((r) => r.userId && r.locationId).map(strip),
+      });
+      data.setData(result);
+      toast.success('הסבב נשמר');
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const update = (i, patchRow) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patchRow, thisWeek: null, nextWeek: null } : r)));
+  const sunday = (() => {
+    const d = new Date(`${today()}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - d.getUTCDay());
+    return d.toISOString().slice(0, 10);
+  })();
+
+  return (
+    <Panel
+      title="סבב שבועי"
+      subtitle="מטמיעים שעובדים במתכונת שבוע־שבוע. הסוג של כל שבוע נגזר ממה שעבדו בסידור שפורסם לפניו; העוגן משמש כשאין סידור כזה"
+      actions={
+        <>
+          <button type="button" className="btn btn-sm"
+            onClick={() => setRows([...(rows ?? []), {
+              userId: '', locationId: locations[0].id, anchorWeek: sunday, anchorCategory: locations[0].rotation_cycle[0],
+            }])}>
+            + מטמיע לסבב
+          </button>
+          <button type="button" className="btn btn-sm btn-primary" onClick={() => save.run()} disabled={!dirty || save.busy}>
+            {save.busy ? 'שומר…' : 'שמירה'}
+          </button>
+        </>
+      }
+      flush
+    >
+      <StateView loading={data.loading || !rows} error={data.error} onRetry={data.reload}
+        empty={rows && rows.length === 0}
+        emptyProps={{ icon: '🔄', title: 'אין עדיין מטמיעים בסבב', text: 'רק מטמיעים שיתווספו כאן יגישו זמינות לפי הסבב.' }}>
+        <div className="table-wrap">
+          <table className="table table-cards">
+            <thead>
+              <tr><th>מטמיע</th><th>מיקום</th><th>שבוע עוגן</th><th>סוג בשבוע העוגן</th><th>השבוע</th><th>שבוע הבא</th><th /></tr>
+            </thead>
+            <tbody>
+              {(rows ?? []).map((r, i) => (
+                <tr key={i}>
+                  <td data-label="מטמיע">
+                    <select value={r.userId} onChange={(e) => update(i, { userId: e.target.value })} aria-label="מטמיע" style={{ minWidth: 140 }}>
+                      <option value="">בחירה…</option>
+                      {implementers.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+                    </select>
+                  </td>
+                  <td data-label="מיקום">
+                    <select value={r.locationId} aria-label="מיקום" style={{ minWidth: 120 }}
+                      onChange={(e) => update(i, { locationId: e.target.value, anchorCategory: cycleOf(e.target.value)[0] })}>
+                      {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                  </td>
+                  <td data-label="שבוע עוגן">
+                    <input type="date" value={r.anchorWeek} aria-label="שבוע עוגן" step={7}
+                      onChange={(e) => update(i, { anchorWeek: e.target.value })} />
+                  </td>
+                  <td data-label="סוג בשבוע העוגן">
+                    <select value={r.anchorCategory} onChange={(e) => update(i, { anchorCategory: e.target.value })} aria-label="סוג משמרת" style={{ minWidth: 90 }}>
+                      {cycleOf(r.locationId).map((c) => <option key={c} value={c}>{CATEGORY_NAME[c]}</option>)}
+                    </select>
+                  </td>
+                  <td data-label="השבוע"><RotationWeek info={r.thisWeek} /></td>
+                  <td data-label="שבוע הבא"><RotationWeek info={r.nextWeek} /></td>
+                  <td>
+                    <button type="button" className="btn btn-sm btn-ghost" aria-label="הסרה מהסבב"
+                      onClick={() => setRows(rows.filter((_, j) => j !== i))}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </StateView>
+    </Panel>
+  );
+}
+
+const strip = ({ userId, locationId, anchorWeek, anchorCategory }) => ({ userId, locationId, anchorWeek, anchorCategory });
+
+function RotationWeek({ info }) {
+  if (!info) return <span className="muted">—</span>;
+  return (
+    <span title={info.source.kind === 'roster' ? `לפי הסידור של שבוע ${fmtDateFull(info.source.week)}` : 'לפי העוגן'}>
+      <Tag tone="accent">{CATEGORY_NAME[info.category]}</Tag>
+    </span>
   );
 }
 
@@ -307,6 +432,9 @@ function LocationShifts({ siteId, location, onEdit, onChanged }) {
       meta={
         <>
           {allShifts.length} משמרות
+          {location.rotation_cycle && (
+            <Tag tone="accent">סבב: {location.rotation_cycle.map((c) => CATEGORY_NAME[c]).join(' ← ')}</Tag>
+          )}
           {periods.length < 3 && periods.map((p) => (
             <span key={p} className={`phase phase-${p}`}>{PERIOD_NAME[p]}</span>
           ))}
@@ -757,6 +885,7 @@ function LocationForm({ siteId, location, onClose, onSaved }) {
     description: location?.description ?? '',
     isActive: location?.is_active ?? true,
     periods: location?.periods ?? ['training', 'golive', 'support'],
+    rotationCycle: location?.rotation_cycle ?? null,
   });
 
   const match = useMemo(
@@ -793,7 +922,8 @@ function LocationForm({ siteId, location, onClose, onSaved }) {
       footer={
         <>
           <button type="button" className="btn btn-primary" onClick={() => save.run()}
-            disabled={save.busy || !form.name.trim() || form.periods.length === 0}>
+            disabled={save.busy || !form.name.trim() || form.periods.length === 0
+              || (form.rotationCycle && form.rotationCycle.length < 2)}>
             {save.busy ? 'שומר…' : 'שמירה'}
           </button>
           <button type="button" className="btn" onClick={onClose}>ביטול</button>
@@ -843,6 +973,49 @@ function LocationForm({ siteId, location, onClose, onSaved }) {
         {(props) => (
           <input {...props} type="text" value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        )}
+      </Field>
+
+      <Field
+        label="מתכונת עבודה"
+        hint={form.rotationCycle
+          ? 'שבוע־שבוע: כל שבוע המטמיע עובד בסוג משמרת אחד, ובשבוע הבא עובר לסוג הבא בסדר. לחיצה על סוג מוסיפה או מסירה אותו מהסדר'
+          : 'רגילה: המטמיע מגיש זמינות לכל המשמרות'}
+      >
+        {() => (
+          <div className="stack" style={{ gap: 8 }}>
+            <Segmented
+              label="מתכונת עבודה"
+              value={form.rotationCycle ? 'rotation' : 'regular'}
+              onChange={(v) => setForm({ ...form, rotationCycle: v === 'rotation' ? CATEGORIES.map((c) => c.value) : null })}
+              options={[{ value: 'regular', label: 'רגילה' }, { value: 'rotation', label: 'סבב שבועי (שבוע־שבוע)' }]}
+            />
+            {form.rotationCycle && (
+              <>
+                <div className="row" style={{ gap: 6 }}>
+                  {CATEGORIES.map((c) => {
+                    const idx = form.rotationCycle.indexOf(c.value);
+                    return (
+                      <button key={c.value} type="button" className="chip" aria-pressed={idx >= 0}
+                        onClick={() => setForm({
+                          ...form,
+                          rotationCycle: idx >= 0
+                            ? form.rotationCycle.filter((x) => x !== c.value)
+                            : [...form.rotationCycle, c.value],
+                        })}>
+                        {idx >= 0 && <span className="tnum">{idx + 1}. </span>}{c.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="small muted">
+                  {form.rotationCycle.length >= 2
+                    ? `סדר הסבב: ${[...form.rotationCycle, form.rotationCycle[0]].map((c) => CATEGORY_NAME[c]).join(' ← ')}`
+                    : 'יש לבחור לפחות שני סוגי משמרת'}
+                </div>
+              </>
+            )}
+          </div>
         )}
       </Field>
 

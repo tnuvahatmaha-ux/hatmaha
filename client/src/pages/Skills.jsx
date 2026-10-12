@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, MessageSquareText, Plus, Trash2 } from 'lucide-react';
+import { Copy, Download, MessageSquareText, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useApi, useAction } from '../lib/useApi.js';
 import { post, put, del, download } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { usePermissions } from '../context/PermissionsContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
-import { Panel, StateView, Tag, Notice, Field, Modal, Segmented, Empty } from '../components/ui/index.jsx';
+import { Panel, StateView, Tag, Notice, Field, Modal, Segmented, Empty, ConfirmDialog } from '../components/ui/index.jsx';
 import { fmtDateFull } from '../lib/format.js';
 
 /**
@@ -44,25 +44,29 @@ export default function Skills() {
         }
       />
 
-      {isManager && (
-        <div className="row" style={{ marginBlockEnd: 'var(--space-4)' }}>
-          <Segmented
-            label="מסכי הסקילומטר"
-            value={tab}
-            onChange={setTab}
-            options={[
-              { value: 'fill', label: 'מילוי ותוצאות' },
-              { value: 'rounds', label: 'סבבים' },
-              { value: 'topics', label: 'נושאים' },
-              { value: 'users', label: 'משתמשי קצה' },
-            ]}
-          />
-        </div>
-      )}
+      <div className="row" style={{ marginBlockEnd: 'var(--space-4)' }}>
+        <Segmented
+          label="מסכי הסקילומטר"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'fill', label: 'מילוי ותוצאות' },
+            { value: 'progress', label: 'התקדמות' },
+            ...(isManager
+              ? [
+                  { value: 'rounds', label: 'סבבים' },
+                  { value: 'topics', label: 'נושאים' },
+                  { value: 'users', label: 'משתמשי קצה' },
+                ]
+              : []),
+          ]}
+        />
+      </div>
 
       <StateView loading={sites.loading} error={sites.error} onRetry={sites.reload}
         empty={!sites.loading && !siteId} emptyProps={{ icon: '🏥', title: 'אין אתר זמין' }}>
         {siteId && tab === 'fill' && <FillTab siteId={siteId} />}
+        {siteId && tab === 'progress' && <ProgressTab siteId={siteId} />}
         {siteId && tab === 'rounds' && <RoundsTab siteId={siteId} />}
         {tab === 'topics' && <TopicsTab />}
         {siteId && tab === 'users' && <EndUsersTab siteId={siteId} />}
@@ -330,8 +334,18 @@ function NoteDialog({ roundId, user, initial, readOnly, onClose, onSaved }) {
    ========================================================================== */
 
 function RoundsTab({ siteId }) {
+  const toast = useToast();
   const rounds = useApi('/api/skills/rounds', { siteId });
   const [editing, setEditing] = useState(null);
+
+  const duplicate = useAction(
+    async (round) => {
+      const { round: copy } = await post(`/api/skills/rounds/${round.id}/duplicate`, {});
+      toast.success(`נוצר "${copy.name}" — בטיוטה, עם אותם נושאים ובלי ציונים`);
+      rounds.reload();
+    },
+    { onError: (err) => toast.error(err) },
+  );
 
   return (
     <Panel
@@ -356,7 +370,15 @@ function RoundsTab({ siteId }) {
                   <td data-label="נושאים">{r.topic_ids.length}</td>
                   <td data-label="ציונים">{r.score_count}</td>
                   <td data-label="סטטוס"><Tag tone={ROUND_STATUS[r.status][1]}>{ROUND_STATUS[r.status][0]}</Tag></td>
-                  <td><button type="button" className="btn btn-sm" onClick={() => setEditing(r)}>עריכה</button></td>
+                  <td>
+                    <div className="row row-end" style={{ gap: 6 }}>
+                      <button type="button" className="btn btn-sm" onClick={() => setEditing(r)}>עריכה</button>
+                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => duplicate.run(r)}
+                        disabled={duplicate.busy} title="סבב חדש עם אותם נושאים, בלי ציונים">
+                        <Copy size={15} /> שכפול
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -500,6 +522,7 @@ function TopicsTab() {
     { onError: (err) => toast.error(err) },
   );
 
+  const [editing, setEditing] = useState(null);
   const remove = useAction(
     async (id) => { await del(`/api/skills/topics/${id}`); topics.reload(); },
     { onError: (err) => toast.error(err) },
@@ -547,10 +570,16 @@ function TopicsTab() {
                     <td data-label="נושא" className="bold">{t.name}</td>
                     <td data-label="תת-תחום">{t.sub_category_name ?? <span className="muted">כל התחום</span>}</td>
                     <td>
-                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => remove.run(t.id)}
-                        disabled={remove.busy} aria-label={`מחיקת הנושא ${t.name}`}>
-                        <Trash2 size={15} />
-                      </button>
+                      <div className="row row-end" style={{ gap: 4 }}>
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setEditing(t)}
+                          aria-label={`עריכת הנושא ${t.name}`}>
+                          <Pencil size={15} />
+                        </button>
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => remove.run(t.id)}
+                          disabled={remove.busy} aria-label={`מחיקת הנושא ${t.name}`}>
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -559,7 +588,81 @@ function TopicsTab() {
           </div>
         </StateView>
       </Panel>
+
+      {editing && (
+        <TopicDialog topic={editing} domains={domainList}
+          onClose={() => setEditing(null)} onSaved={() => { setEditing(null); topics.reload(); }} />
+      )}
     </>
+  );
+}
+
+function TopicDialog({ topic, domains, onClose, onSaved }) {
+  const toast = useToast();
+  const [form, setForm] = useState({
+    name: topic.name,
+    description: topic.description ?? '',
+    domainId: topic.domain_id,
+    subCategoryId: topic.sub_category_id ?? '',
+  });
+  const domain = domains.find((d) => d.id === form.domainId);
+
+  const save = useAction(
+    async () => {
+      await post('/api/skills/topics', {
+        id: topic.id,
+        domainId: form.domainId,
+        subCategoryId: form.subCategoryId || null,
+        name: form.name,
+        description: form.description.trim() || null,
+      });
+      toast.success('הנושא עודכן');
+      onSaved();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <Modal
+      title={`עריכת נושא — ${topic.name}`}
+      onClose={onClose}
+      width={520}
+      footer={
+        <>
+          <button type="button" className="btn btn-primary" onClick={() => save.run()} disabled={save.busy || !form.name.trim()}>
+            {save.busy ? 'שומר…' : 'שמירה'}
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>
+        </>
+      }
+    >
+      <Field label="שם הנושא" required>
+        {(props) => <input {...props} type="text" value={form.name} maxLength={200}
+          onChange={(e) => setForm({ ...form, name: e.target.value })} />}
+      </Field>
+      <div className="grid grid-2">
+        <Field label="תחום" required>
+          {(props) => (
+            <select {...props} value={form.domainId}
+              onChange={(e) => setForm({ ...form, domainId: e.target.value, subCategoryId: '' })}>
+              {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          )}
+        </Field>
+        <Field label="תת-תחום" hint="ריק = הנושא לכל התחום">
+          {(props) => (
+            <select {...props} value={form.subCategoryId} onChange={(e) => setForm({ ...form, subCategoryId: e.target.value })}>
+              <option value="">כל התחום</option>
+              {(domain?.subCategories ?? []).map((sc) => <option key={sc.id} value={sc.id}>{sc.name}</option>)}
+            </select>
+          )}
+        </Field>
+      </div>
+      <Field label="תיאור" hint="מוצג כשמעבירים את העכבר על כותרת הנושא בטבלה">
+        {(props) => <textarea {...props} rows={3} value={form.description} maxLength={1000}
+          onChange={(e) => setForm({ ...form, description: e.target.value })} />}
+      </Field>
+    </Modal>
   );
 }
 
@@ -581,8 +684,21 @@ function parsePaste(text) {
 function EndUsersTab({ siteId }) {
   const toast = useToast();
   const users = useApi('/api/skills/end-users', { siteId });
+  const domains = useApi('/api/settings/domains');
   const [text, setText] = useState('');
   const [preview, setPreview] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [removing, setRemoving] = useState(null);
+
+  const remove = useAction(
+    async () => {
+      await del(`/api/skills/end-users/${removing.id}`);
+      toast.success(`${removing.full_name} הוסר/ה מהסקילומטר`);
+      setRemoving(null);
+      users.reload();
+    },
+    { onError: (err) => toast.error(err) },
+  );
 
   const check = useAction(
     async () => setPreview(await post('/api/skills/end-users/import', { siteId, dryRun: true, rows: parsePaste(text) })),
@@ -640,13 +756,17 @@ function EndUsersTab({ siteId }) {
         )}
       </Panel>
 
-      <Panel title={`${(users.data?.endUsers ?? []).length} משתמשי קצה`} flush>
+      <Panel
+        title={`${(users.data?.endUsers ?? []).length} משתמשי קצה`}
+        actions={<button type="button" className="btn btn-sm btn-primary" onClick={() => setEditing({})}><Plus size={15} /> משתמש</button>}
+        flush
+      >
         <StateView loading={users.loading} error={users.error} onRetry={users.reload}
           empty={!users.loading && (users.data?.endUsers ?? []).length === 0}
           emptyProps={{ icon: '👤', title: 'עדיין לא יובאו משתמשי קצה לאתר' }}>
           <div className="table-wrap">
             <table className="table table-cards">
-              <thead><tr><th>שם</th><th>מספר עובד</th><th>מחלקה</th><th>תפקיד</th><th>תחום</th><th>תת-תחום</th></tr></thead>
+              <thead><tr><th>שם</th><th>מספר עובד</th><th>מחלקה</th><th>תפקיד</th><th>תחום</th><th>תת-תחום</th><th /></tr></thead>
               <tbody>
                 {(users.data?.endUsers ?? []).map((u) => (
                   <tr key={u.id}>
@@ -656,6 +776,18 @@ function EndUsersTab({ siteId }) {
                     <td data-label="תפקיד">{u.role_title ?? '—'}</td>
                     <td data-label="תחום">{u.domain_name ?? <Tag tone="warn">חסר</Tag>}</td>
                     <td data-label="תת-תחום">{u.sub_category_name ?? '—'}</td>
+                    <td>
+                      <div className="row row-end" style={{ gap: 4 }}>
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setEditing(u)}
+                          aria-label={`עריכת ${u.full_name}`}>
+                          <Pencil size={15} />
+                        </button>
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setRemoving(u)}
+                          aria-label={`הסרת ${u.full_name}`}>
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -663,6 +795,200 @@ function EndUsersTab({ siteId }) {
           </div>
         </StateView>
       </Panel>
+
+      {editing && (
+        <EndUserDialog siteId={siteId} user={editing.id ? editing : null} domains={domains.data?.domains ?? []}
+          onClose={() => setEditing(null)} onSaved={() => { setEditing(null); users.reload(); }} />
+      )}
+      {removing && (
+        <ConfirmDialog
+          title={`הסרת ${removing.full_name}`}
+          message="המשתמש יוסר מטבלת המילוי ומהדוחות. ציונים שכבר ניתנו לו נשמרים במסד."
+          confirmLabel="הסרה"
+          busy={remove.busy}
+          onConfirm={() => remove.run()}
+          onCancel={() => setRemoving(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function EndUserDialog({ siteId, user, domains, onClose, onSaved }) {
+  const toast = useToast();
+  const [form, setForm] = useState({
+    fullName: user?.full_name ?? '',
+    employeeNo: user?.employee_no ?? '',
+    department: user?.department ?? '',
+    roleTitle: user?.role_title ?? '',
+    domainId: user?.domain_id ?? '',
+    subCategoryId: user?.sub_category_id ?? '',
+  });
+  const domain = domains.find((d) => d.id === form.domainId);
+  const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
+
+  const save = useAction(
+    async () => {
+      await post('/api/skills/end-users', {
+        siteId,
+        id: user?.id,
+        fullName: form.fullName,
+        employeeNo: form.employeeNo.trim() || null,
+        department: form.department.trim() || null,
+        roleTitle: form.roleTitle.trim() || null,
+        domainId: form.domainId || null,
+        subCategoryId: form.subCategoryId || null,
+      });
+      toast.success(user ? 'הפרטים עודכנו' : 'המשתמש נוסף');
+      onSaved();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <Modal
+      title={user ? `עריכת ${user.full_name}` : 'משתמש קצה חדש'}
+      onClose={onClose}
+      width={560}
+      footer={
+        <>
+          <button type="button" className="btn btn-primary" onClick={() => save.run()} disabled={save.busy || !form.fullName.trim()}>
+            {save.busy ? 'שומר…' : 'שמירה'}
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>
+        </>
+      }
+    >
+      <div className="grid grid-2">
+        <Field label="שם מלא" required>
+          {(props) => <input {...props} type="text" value={form.fullName} maxLength={200} onChange={set('fullName')} />}
+        </Field>
+        <Field label="מספר עובד">
+          {(props) => <input {...props} type="text" value={form.employeeNo} maxLength={40} onChange={set('employeeNo')} />}
+        </Field>
+        <Field label="מחלקה">
+          {(props) => <input {...props} type="text" value={form.department} maxLength={120} onChange={set('department')} />}
+        </Field>
+        <Field label="תפקיד">
+          {(props) => <input {...props} type="text" value={form.roleTitle} maxLength={120} onChange={set('roleTitle')} />}
+        </Field>
+        <Field label="תחום">
+          {(props) => (
+            <select {...props} value={form.domainId} onChange={(e) => setForm({ ...form, domainId: e.target.value, subCategoryId: '' })}>
+              <option value="">ללא תחום</option>
+              {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          )}
+        </Field>
+        <Field label="תת-תחום">
+          {(props) => (
+            <select {...props} value={form.subCategoryId} onChange={set('subCategoryId')} disabled={!domain}>
+              <option value="">—</option>
+              {(domain?.subCategories ?? []).map((sc) => <option key={sc.id} value={sc.id}>{sc.name}</option>)}
+            </select>
+          )}
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+/* ==========================================================================
+   התקדמות — ממוצע לכל משתמש בכל סבב, כולל סבבים שנסגרו
+   ========================================================================== */
+
+function ProgressTab({ siteId }) {
+  const toast = useToast();
+  const { can } = usePermissions();
+  const domains = useApi('/api/settings/domains');
+  const [domainId, setDomainId] = useState('');
+  const [open, setOpen] = useState(null);
+  const params = domainId ? { siteId, domainId } : { siteId };
+  const data = useApi('/api/skills/progress', params);
+  const rounds = data.data?.rounds ?? [];
+  const users = data.data?.users ?? [];
+
+  const exportFile = useAction(
+    () => download('/api/skills/progress.xlsx', params, 'סקילומטר - התקדמות.xlsx'),
+    { onError: (err) => toast.error(err) },
+  );
+
+  return (
+    <Panel
+      title="התקדמות לפי משתמשים"
+      subtitle="הממוצע של כל משתמש בכל סבב — גם בסבבים שנסגרו. לחיצה על שורה מציגה פירוט לפי נושא"
+      actions={
+        <div className="row" style={{ gap: 8 }}>
+          <select value={domainId} onChange={(e) => setDomainId(e.target.value)} aria-label="סינון לפי תחום" style={{ width: 'auto' }}>
+            <option value="">כל התחומים</option>
+            {(domains.data?.domains ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+          {can('skills', 'export') && (
+            <button type="button" className="btn btn-sm" onClick={() => exportFile.run()} disabled={exportFile.busy || !users.length}>
+              <Download size={15} /> אקסל
+            </button>
+          )}
+        </div>
+      }
+      flush
+    >
+      <StateView loading={data.loading} error={data.error} onRetry={data.reload}
+        empty={!data.loading && (rounds.length === 0 || users.length === 0)}
+        emptyProps={{ icon: '📈', title: rounds.length === 0 ? 'עדיין אין סבבים שנפתחו' : 'אין משתמשי קצה בתחומים האלה' }}>
+        <div className="table-wrap" style={{ maxHeight: '70vh' }}>
+          <table className="skill-table">
+            <thead>
+              <tr>
+                <th className="sticky-name">משתמש</th>
+                {rounds.map((r) => (
+                  <th key={r.id}>
+                    {r.name}
+                    {r.status === 'closed' && <div className="tiny muted">סגור</div>}
+                  </th>
+                ))}
+                <th>שינוי</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <ProgressRow key={u.id} user={u} rounds={rounds} open={open === u.id}
+                  onToggle={() => setOpen(open === u.id ? null : u.id)} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </StateView>
+    </Panel>
+  );
+}
+
+function ProgressRow({ user, rounds, open, onToggle }) {
+  return (
+    <>
+      <tr onClick={onToggle} style={{ cursor: 'pointer' }} aria-expanded={open}>
+        <td className="sticky-name">
+          <div className="bold">{user.full_name}</div>
+          <div className="tiny muted">{[user.domain_name, user.sub_category_name, user.department].filter(Boolean).join(' · ')}</div>
+        </td>
+        {user.rounds.map((r, i) => (
+          <td key={rounds[i].id} style={{ textAlign: 'center' }}><ScorePill value={r?.avg ?? null} /></td>
+        ))}
+        <td style={{ textAlign: 'center' }} className="tnum bold">
+          {user.delta == null ? <span className="muted">—</span>
+            : <span style={{ color: user.delta > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                {user.delta > 0 ? '▲' : '▼'} {Math.abs(user.delta).toFixed(2)}
+              </span>}
+        </td>
+      </tr>
+      {open && user.topics.map((t) => (
+        <tr key={t.topicId} className="muted">
+          <td className="sticky-name small" style={{ paddingInlineStart: 28 }}>{t.name}</td>
+          {rounds.map((r) => (
+            <td key={r.id} style={{ textAlign: 'center' }} className="tnum small">{t.scores[r.id] ?? '—'}</td>
+          ))}
+          <td />
+        </tr>
+      ))}
     </>
   );
 }

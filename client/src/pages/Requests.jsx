@@ -122,9 +122,17 @@ function AvailabilityTab() {
   /** משמרות "זמין" לפי סוג — אותה ספירה שהשרת עושה בבדיקת המינימום */
   const available = useMemo(() => countAvailable(win?.windows ?? [], cells), [win, cells]);
 
+  /** סבב שבועי: הסוג של המטמיע השבוע נעול על "יכול", והסוגים האחרים בסבב לא נדרשים */
+  const rotation = win?.rotation ?? null;
+  const rotationLock = (w) =>
+    !rotation ? null
+      : rotation.categories.includes(w.category) ? 'required'
+        : rotation.exempt.includes(w.category) ? 'exempt' : null;
+
   /** לחיצה מחליפה בין יכול → מעדיף שלא → לא יכול → יכול */
   const cycle = (date, windowKeyValue) => {
     if (readOnly) return;
+    if (rotationLock(win.windows.find((w) => w.key === windowKeyValue) ?? {})) return;
     const key = `${date}|${windowKeyValue}`;
     const order = ['can', 'prefer_not', 'cannot'];
     const currentValue = cells[key] ?? 'can';
@@ -139,7 +147,7 @@ function AvailabilityTab() {
       .filter(([key]) => {
         const [date, range] = key.split('|');
         const w = win.windows.find((x) => x.key === range);
-        return w && activeOn(w, date);
+        return w && activeOn(w, date) && !rotationLock(w);
       })
       .map(([key, value]) => {
         const [date, range] = key.split('|');
@@ -262,7 +270,16 @@ function AvailabilityTab() {
             </Notice>
           )}
 
-          {win.minimums && <QuotaBar minimums={win.minimums} available={available} />}
+          {rotation && (
+            <Notice icon="🔄" title={`השבוע את/ה בסבב ${rotation.categories.map((c) => CATEGORY_NAMES[c]).join(' / ')}`}>
+              {rotation.locations.map((l) => l.locationName).join(', ')} עובד/ת במתכונת שבוע־שבוע.
+              יש להיות זמין/ה בכל משמרות ה{rotation.categories.map((c) => CATEGORY_NAMES[c]).join(' / ')} השבוע
+              {rotation.exempt.length > 0 && `, ואין צורך לסמן זמינות ל${rotation.exempt.map((c) => CATEGORY_NAMES[c]).join(' ול')}`}.
+              להיעדרות יש להגיש בקשת אילוץ.
+            </Notice>
+          )}
+
+          {win.minimums && <QuotaBar minimums={win.minimums} available={available} exempt={rotation?.exempt ?? []} />}
 
           <AvailabilityGrid
             days={win.days}
@@ -271,6 +288,7 @@ function AvailabilityTab() {
             cells={cells}
             onCycle={cycle}
             readOnly={readOnly}
+            lockOf={rotationLock}
           />
 
           <div className="row mt-3" style={{ justifyContent: 'space-between' }}>
@@ -408,8 +426,8 @@ function countAvailable(windows, cells) {
 }
 
 /** המינימום שהמנהל הגדיר לכל סוג משמרת, מול מה שסומן "זמין" */
-function QuotaBar({ minimums, available }) {
-  const keys = Object.keys(CATEGORY_NAMES).filter((k) => minimums[k] > 0);
+function QuotaBar({ minimums, available, exempt = [] }) {
+  const keys = Object.keys(CATEGORY_NAMES).filter((k) => minimums[k] > 0 && !exempt.includes(k));
   if (!keys.length) return null;
   return (
     <div className="quota-bar" aria-label="מינימום משמרות זמינות">
@@ -426,7 +444,7 @@ function QuotaBar({ minimums, available }) {
   );
 }
 
-function AvailabilityGrid({ days, phases, windows, cells, onCycle, readOnly }) {
+function AvailabilityGrid({ days, phases, windows, cells, onCycle, readOnly, lockOf = () => null }) {
   return (
     <div
       className="avail-grid"
@@ -448,13 +466,18 @@ function AvailabilityGrid({ days, phases, windows, cells, onCycle, readOnly }) {
 
       {days.map((date) => (
         <Row key={date} date={date} phase={phases[date]} showPhase={new Set(Object.values(phases)).size > 1}
-          windows={windows} cells={cells} onCycle={onCycle} readOnly={readOnly} />
+          windows={windows} cells={cells} onCycle={onCycle} readOnly={readOnly} lockOf={lockOf} />
       ))}
     </div>
   );
 }
 
-function Row({ date, phase, showPhase, windows, cells, onCycle, readOnly }) {
+const ROTATION_LOCKS = {
+  required: { glyph: '✓', label: 'חובה בסבב השבועי' },
+  exempt: { glyph: '·', label: 'לא נדרש השבוע (סבב שבועי)' },
+};
+
+function Row({ date, phase, showPhase, windows, cells, onCycle, readOnly, lockOf }) {
   return (
     <>
       <div className="avail-day" role="rowheader">
@@ -469,6 +492,17 @@ function Row({ date, phase, showPhase, windows, cells, onCycle, readOnly }) {
             <button key={w.key} type="button" className="avail-cell" disabled
               aria-label={`${dayName(date)} ${fmtDate(date)}, ${w.startTime}–${w.endTime}: אין משמרת ביום הזה`}>
               <span aria-hidden="true">—</span>
+            </button>
+          );
+        }
+        const lock = lockOf(w);
+        if (lock) {
+          const meta = ROTATION_LOCKS[lock];
+          return (
+            <button key={w.key} type="button" className={`avail-cell avail-rot-${lock}`} disabled
+              aria-label={`${dayName(date)} ${fmtDate(date)}, ${w.startTime}–${w.endTime}: ${meta.label}`}
+              title={meta.label}>
+              <span aria-hidden="true">{meta.glyph}</span>
             </button>
           );
         }

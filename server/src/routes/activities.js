@@ -7,7 +7,7 @@ import { withIdempotency } from '../lib/idempotency.js';
 import { setETag } from '../lib/etag.js';
 import { sendCsv } from '../lib/csv.js';
 import { recordExport } from '../audit/service.js';
-import { uuid, dateStr, timeStr, optionalText, idParam } from '../schemas/common.schema.js';
+import { uuid, dateStr, timeStr, optionalText, idParam, sundayDate } from '../schemas/common.schema.js';
 import * as svc from '../services/activities.service.js';
 import { query } from '../lib/db.js';
 
@@ -67,6 +67,14 @@ activitiesRouter.get(
   async (req, res) => res.json({ tasks: await svc.mentorTasks(req.user.userId) }),
 );
 
+/** לו״ז הכשרה: מטמיעים × ימים, עם הפעילויות והשיבוצים של השבוע */
+activitiesRouter.get(
+  '/board',
+  requirePermission('activities', 'view', (req) => ({ siteId: req.query.siteId })),
+  validate({ query: z.object({ siteId: uuid, weekStart: sundayDate }) }),
+  async (req, res) => res.json(await svc.board(req.validQuery)),
+);
+
 activitiesRouter.get(
   '/:id',
   requirePermission('activities', 'view', activityScope),
@@ -116,6 +124,14 @@ activitiesRouter.post(
   requirePermission('activities', 'edit', activityScope),
   validate({ params: idParam, body: z.object({ prepDone: z.boolean() }) }),
   async (req, res) => res.json({ activity: await svc.setPrep(req.user, req.params.id, req.body.prepDone) }),
+);
+
+/** שיוך שמי של מטמיע לפעילות, או הסרה ממנה */
+activitiesRouter.post(
+  '/:id/participants',
+  requirePermission('activities', 'edit', activityScope),
+  validate({ params: idParam, body: z.object({ userId: uuid, present: z.boolean() }) }),
+  async (req, res) => res.json(await svc.setParticipant(req.user, req.params.id, req.body)),
 );
 
 activitiesRouter.post(

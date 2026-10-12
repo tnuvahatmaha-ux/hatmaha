@@ -131,6 +131,21 @@ sitesRouter.post(
   },
 );
 
+/* ── סבב שבועי ── */
+sitesRouter.get(
+  '/:siteId/rotations',
+  requirePermission('sites', 'view', siteScope),
+  validate({ params: z.object({ siteId: uuid }) }),
+  async (req, res) => res.json(await svc.rotations(req.params.siteId)),
+);
+
+sitesRouter.put(
+  '/:siteId/rotations',
+  requirePermission('sites', 'edit', siteScope),
+  validate({ params: z.object({ siteId: uuid }), body: schema.rotationsBody }),
+  async (req, res) => res.json(await svc.replaceRotations(req.user, req.params.siteId, req.body.rotations)),
+);
+
 /* ── תקופות ── */
 sitesRouter.put(
   '/:siteId/periods',

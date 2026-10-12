@@ -523,6 +523,9 @@ input[type='file'] { font: inherit; font-size: 13px; }
 .avail-can { background: var(--success-bg); color: var(--success); }
 .avail-prefer_not { background: var(--warn-bg); color: var(--warn); }
 .avail-cannot { background: var(--danger-bg); color: var(--danger); }
+/* סבב שבועי: הסוג של השבוע נעול על זמין, השאר לא נדרשים */
+.avail-cell.avail-rot-required:disabled { background: var(--success-bg); color: var(--success); box-shadow: inset 0 0 0 2px var(--success); }
+.avail-cell.avail-rot-exempt:disabled { background: var(--muted-bg); color: var(--faint); }
 .mandatory-dot {
   display: inline-block; width: 6px; height: 6px; border-radius: 50%;
   background: var(--primary); margin-inline-start: 4px; vertical-align: middle;
@@ -569,6 +572,13 @@ input[type='file'] { font: inherit; font-size: 13px; }
   width: 100%; font-size: 11px; font-weight: 600; line-height: 1.3;
 }
 .roster-slot-head .tnum { color: var(--muted); font-size: 10px; font-weight: 400; }
+.roster-hours {
+  display: inline-flex; align-items: center; gap: 3px; padding: 0 4px; margin: 0;
+  background: none; border: 0; border-radius: var(--radius-xs); cursor: default; font: inherit;
+}
+button.roster-hours { cursor: pointer; }
+button.roster-hours:hover { background: var(--fill-strong); }
+.roster-slot-head .roster-hours.changed { color: var(--warn); font-weight: 600; }
 .roster-noshifts {
   display: flex; align-items: center; gap: 6px; padding: 8px var(--space-3);
   background: var(--surface-2); border-radius: var(--radius-sm); font-size: 12.5px; color: var(--muted);
@@ -606,6 +616,18 @@ input[type='file'] { font: inherit; font-size: 13px; }
   color: var(--primary); width: 100%;
 }
 .roster-add:hover { background: var(--primary-ink); }
+
+/* לו״ז שבועי של פעילויות */
+.board-cell { min-width: 130px; }
+.board-chip { background: var(--primary-ink); box-shadow: none; flex-wrap: wrap; }
+.board-chip .tag { font-size: 10px; padding: 0 5px; }
+.board-shift { background: var(--surface-2); box-shadow: none; color: var(--muted); gap: 4px; }
+.board-activity {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%;
+  border: 0; border-radius: 8px; background: var(--primary-ink); color: var(--ink);
+  padding: 5px 7px; font: inherit; font-size: 11.5px; text-align: start; cursor: pointer;
+}
+.board-activity:hover { box-shadow: inset 0 0 0 1.5px var(--primary); }
 
 /* --------------------------------------------------------------------------
    מטריצת ההרשאות

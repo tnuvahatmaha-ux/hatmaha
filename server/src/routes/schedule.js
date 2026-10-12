@@ -35,7 +35,7 @@ scheduleRouter.get(
              ra.starts_at, ra.ends_at,
              coalesce(st.name, 'משמרת') as title,
              s.name as site_name, l.name as location_name, 'published' as status,
-             ra.note
+             ra.note, false as as_instructor
         from roster_assignments ra
         join roster_versions v on v.id = ra.version_id
         join sites s on s.id = ra.site_id
@@ -47,23 +47,24 @@ scheduleRouter.get(
 
       union all
 
+      -- פעילויות שהמשתמש משתתף בהן, ופעילויות שהוא המדריך שמעביר אותן
       select 'activity', a.id, a.activity_date, a.starts_at, a.ends_at,
              coalesce(nullif(btrim(a.title), ''), at.name_he),
-             s.name, l.name, a.status, null
+             s.name, l.name, a.status, null, coalesce(a.owner_user_id = $1, false)
         from activities a
-        join activity_participants ap on ap.activity_id = a.id and ap.user_id = $1
+        left join activity_participants ap on ap.activity_id = a.id and ap.user_id = $1
         join activity_types at on at.id = a.activity_type_id
         join sites s on s.id = a.site_id
         left join locations l on l.id = a.location_id
        where a.deleted_at is null
-         and a.visibility = 'participants'
+         and ((ap.user_id is not null and a.visibility = 'participants') or a.owner_user_id = $1)
          and a.status in ('scheduled','completed')
          and a.activity_date between $2 and $3
 
       union all
 
       select 'constraint', cr.id, cr.constraint_date, cr.starts_at, cr.ends_at,
-             ct.name_he, null, null, cr.status::text, null
+             ct.name_he, null, null, cr.status::text, null, false
         from constraint_requests cr
         join constraint_types ct on ct.id = cr.constraint_type_id
        where cr.user_id = $1 and cr.deleted_at is null

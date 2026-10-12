@@ -90,6 +90,7 @@ export default function MySchedule() {
                         )}
                       </div>
                       {item.overlap && <Tag tone="danger">חפיפה</Tag>}
+                      {item.as_instructor && <Tag tone="accent">מעביר/ה</Tag>}
                       <Tag tone={{ shift: 'accent', activity: '', constraint: 'warn' }[item.kind]}>
                         {{ shift: 'משמרת', activity: 'פעילות', constraint: 'אילוץ' }[item.kind]}
                       </Tag>

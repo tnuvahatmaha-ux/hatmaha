@@ -1,6 +1,7 @@
 /**
  * מינימום משמרות "זמין" בהגשת זמינות, לפי סוג משמרת ובסוף השבוע.
- * פרמטר 0 או חסר — אותו סוג אינו נבדק.
+ * פרמטר 0 או חסר — אותו סוג אינו נבדק. מטמיע בסבב שבועי פטור מהסוגים
+ * שאינם שלו השבוע (counts.exempt).
  */
 const LABELS = { morning: 'בוקר', afternoon: 'צהריים', night: 'לילה', weekend: 'סוף שבוע' };
 
@@ -12,6 +13,7 @@ export default {
 
     const missing = [];
     for (const [key, label] of Object.entries(LABELS)) {
+      if (counts.exempt?.includes(key)) continue;
       const min = Number(params[key]) || 0;
       if (min > 0 && (counts[key] ?? 0) < min) missing.push(`${label} ${counts[key] ?? 0}/${min}`);
     }

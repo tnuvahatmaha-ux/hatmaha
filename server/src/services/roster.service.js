@@ -6,6 +6,7 @@ import { evaluateAndExecute } from '../rules/exceptions.js';
 import { registerAction } from '../rules/actions.js';
 import { notify } from '../notifications/service.js';
 import { assertIfMatch } from '../lib/etag.js';
+import { siteRotations, CATEGORY_NAMES } from './rotation.js';
 
 /**
  * סידור עבודה.
@@ -106,9 +107,10 @@ export async function board(versionId) {
 
   const days = weekDays(version.week_start);
 
-  const [locations, shiftTypes, assignments, people, availability, constraints, declarations, phaseRows] = await Promise.all([
+  const [locations, shiftTypes, assignments, people, availability, constraints, declarations, phaseRows,
+    overrides, rotations] = await Promise.all([
     query(
-      `select id, name, capacity, periods::text[] as periods from locations
+      `select id, name, capacity, periods::text[] as periods, rotation_cycle::text[] as rotation_cycle from locations
         where site_id = $1 and deleted_at is null and is_active order by name`,
       [version.site_id],
     ),
@@ -179,9 +181,22 @@ export async function board(versionId) {
          from generate_series($2::date, $2::date + 6, interval '1 day') d`,
       [version.site_id, version.week_start],
     ),
+    // שעות שונות למשמרת ביום מסוים
+    query(
+      `select o.id, o.location_id, o.shift_type_id, o.override_date, o.start_time, o.end_time, o.note,
+              p.full_name as updated_by_name
+         from shift_overrides o left join profiles p on p.id = coalesce(o.updated_by, o.created_by)
+        where o.site_id = $1 and o.deleted_at is null
+          and o.override_date between $2::date and $2::date + 6`,
+      [version.site_id, version.week_start],
+    ),
+    // מי בסבב שבועי, ובאיזה סוג משמרת השבוע
+    siteRotations(query, version.site_id, version.week_start),
   ]);
 
   return {
+    overrides,
+    rotations: Object.fromEntries(rotations),
     version,
     days,
     phases: Object.fromEntries(phaseRows.map((r) => [r.day, r.period])),
@@ -217,8 +232,17 @@ async function assignmentContext(tx, { versionId, userId, date, shiftTypeId, sta
     throw new AppError('E_VALIDATION', 'המשמרת שנבחרה אינה שייכת למיקום הזה');
   }
 
-  const from = startTime ?? shift?.start_time;
-  const to = endTime ?? shift?.end_time;
+  // שינוי נקודתי של שעות המשמרת באותו יום גובר על השעות הרגילות שלה
+  const [override] = shift && !startTime && !endTime
+    ? await tx.query(
+        `select start_time, end_time from shift_overrides
+          where shift_type_id = $1 and override_date = $2 and deleted_at is null`,
+        [shift.id, date],
+      )
+    : [];
+
+  const from = startTime ?? override?.start_time ?? shift?.start_time;
+  const to = endTime ?? override?.end_time ?? shift?.end_time;
   if (!from || !to) {
     throw new AppError('E_VALIDATION', 'יש לבחור משמרת או לציין שעות התחלה וסיום');
   }
@@ -365,6 +389,153 @@ export async function setNote(actor, assignmentId, note) {
       });
     }
     return { id: row.id, note: row.note, noteUpdatedAt: row.note_updated_at };
+  });
+}
+
+/* ───────────────────────── שעות נקודתיות ───────────────────────── */
+
+/** מעדכן את השעות של שיבוצים בטיוטה. חפיפה עם שיבוץ אחר של אותו אדם — מדולג ומדווח */
+async function retime(tx, rows, timezone, startTime, endTime) {
+  const skipped = [];
+  let updated = 0;
+  for (const a of rows) {
+    const { startsAt, endsAt } = toInstants(a.assignment_date, startTime, endTime, timezone);
+    await tx.query('savepoint retime');
+    try {
+      await tx.query(
+        `update roster_assignments set start_time = $2, end_time = $3, starts_at = $4, ends_at = $5
+          where id = $1`,
+        [a.id, startTime, endTime, startsAt, endsAt],
+      );
+      await tx.query('release savepoint retime');
+      updated += 1;
+    } catch (err) {
+      await tx.query('rollback to savepoint retime');
+      if (!['E_CONFLICT', 'E_RULE_BLOCKED'].includes(err.code)) throw err;
+      skipped.push(a.full_name);
+    }
+  }
+  return { updated, skipped };
+}
+
+/**
+ * שינוי שעות של משמרת במיקום ביום מסוים. נשמר לתאריך (ולא לגרסה), ולכן חל
+ * גם על גרסאות הבאות של אותו שבוע. השיבוצים שכבר בתא, בטיוטה, מקבלים את
+ * השעות החדשות — חוץ ממי ששעותיו שונו אישית.
+ */
+export async function setShiftOverride(actor, versionId, input) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const version = await tx.required(
+      `select v.*, s.timezone from roster_versions v join sites s on s.id = v.site_id where v.id = $1`,
+      [versionId],
+      'גרסת הסידור המבוקשת לא נמצאה',
+    );
+    if (version.status !== 'draft') throw new AppError('E_READ_ONLY', 'גרסת הסידור פורסמה ואינה ניתנת לשינוי');
+
+    const shift = await tx.required(
+      'select * from shift_types where id = $1 and site_id = $2 and deleted_at is null',
+      [input.shiftTypeId, version.site_id],
+      'המשמרת המבוקשת לא נמצאה באתר הזה',
+    );
+    if (input.date < version.week_start || input.date > addDays(version.week_start, 6)) {
+      throw new AppError('E_VALIDATION', 'התאריך אינו בשבוע של הסידור');
+    }
+
+    const [previous] = await tx.query(
+      `select start_time, end_time from shift_overrides
+        where shift_type_id = $1 and override_date = $2 and deleted_at is null`,
+      [shift.id, input.date],
+    );
+    const before = previous ?? shift;
+
+    const [override] = await tx.query(
+      `insert into shift_overrides (site_id, location_id, shift_type_id, override_date, start_time, end_time, note)
+       values ($1, $2, $3, $4, $5, $6, $7)
+       on conflict (shift_type_id, override_date) where deleted_at is null
+       do update set start_time = excluded.start_time, end_time = excluded.end_time, note = excluded.note
+       returning *`,
+      [version.site_id, shift.location_id, shift.id, input.date, input.startTime, input.endTime, input.note ?? null],
+    );
+
+    // רק מי שעובד בשעות של התא (ולא בשעות אישיות) עובר לשעות החדשות
+    const rows = await tx.query(
+      `select ra.id, ra.assignment_date, p.full_name from roster_assignments ra join profiles p on p.id = ra.user_id
+        where ra.version_id = $1 and ra.shift_type_id = $2 and ra.assignment_date = $3 and ra.deleted_at is null
+          and ra.start_time = $4 and ra.end_time = $5`,
+      [versionId, shift.id, input.date, before.start_time, before.end_time],
+    );
+    const result = await retime(tx, rows, version.timezone, input.startTime, input.endTime);
+    return { override, ...result };
+  });
+}
+
+export async function removeShiftOverride(actor, versionId, overrideId) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const version = await tx.required(
+      `select v.*, s.timezone from roster_versions v join sites s on s.id = v.site_id where v.id = $1`,
+      [versionId],
+      'גרסת הסידור המבוקשת לא נמצאה',
+    );
+    if (version.status !== 'draft') throw new AppError('E_READ_ONLY', 'גרסת הסידור פורסמה ואינה ניתנת לשינוי');
+
+    const [override] = await tx.query(
+      `update shift_overrides set deleted_at = now(), deleted_by = $3
+        where id = $1 and site_id = $2 and deleted_at is null returning *`,
+      [overrideId, version.site_id, actor.userId],
+    );
+    if (!override) throw new AppError('E_NOT_FOUND', 'השינוי המבוקש לא נמצא');
+
+    const shift = await tx.required('select * from shift_types where id = $1', [override.shift_type_id], 'המשמרת לא נמצאה');
+    const rows = await tx.query(
+      `select ra.id, ra.assignment_date, p.full_name from roster_assignments ra join profiles p on p.id = ra.user_id
+        where ra.version_id = $1 and ra.shift_type_id = $2 and ra.assignment_date = $3 and ra.deleted_at is null
+          and ra.start_time = $4 and ra.end_time = $5`,
+      [versionId, shift.id, override.override_date, override.start_time, override.end_time],
+    );
+    const result = await retime(tx, rows, version.timezone, shift.start_time, shift.end_time);
+    return { removed: overrideId, ...result };
+  });
+}
+
+/**
+ * שעות אישיות לשיבוץ אחד ("להגיע שעה מוקדם"). בלי שעות — חוזר לשעות התא:
+ * השינוי הנקודתי של אותו יום אם יש, ואחרת השעות של המשמרת.
+ */
+export async function setAssignmentHours(actor, assignmentId, { startTime, endTime }, req) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const row = await tx.lock('roster_assignments', assignmentId);
+    if (!row || row.deleted_at) throw new AppError('E_NOT_FOUND', 'השיבוץ המבוקש לא נמצא');
+    if (req) assertIfMatch(req, row);
+
+    const version = await tx.required(
+      `select v.status, s.timezone from roster_versions v join sites s on s.id = v.site_id where v.id = $1`,
+      [row.version_id],
+      'גרסת הסידור לא נמצאה',
+    );
+    if (version.status !== 'draft') throw new AppError('E_READ_ONLY', 'גרסת הסידור פורסמה ואינה ניתנת לשינוי');
+
+    let from = startTime;
+    let to = endTime;
+    if (!from || !to) {
+      if (!row.shift_type_id) throw new AppError('E_VALIDATION', 'לשיבוץ בלי משמרת יש לציין שעות');
+      const [cell] = await tx.query(
+        `select coalesce(o.start_time, st.start_time) as start_time, coalesce(o.end_time, st.end_time) as end_time
+           from shift_types st
+           left join shift_overrides o on o.shift_type_id = st.id and o.override_date = $2 and o.deleted_at is null
+          where st.id = $1`,
+        [row.shift_type_id, row.assignment_date],
+      );
+      from = cell.start_time;
+      to = cell.end_time;
+    }
+
+    const { startsAt, endsAt } = toInstants(row.assignment_date, from, to, version.timezone);
+    const [updated] = await tx.query(
+      `update roster_assignments set start_time = $2, end_time = $3, starts_at = $4, ends_at = $5
+        where id = $1 returning id, start_time, end_time, starts_at, ends_at, row_version`,
+      [assignmentId, from, to, startsAt, endsAt],
+    );
+    return updated;
   });
 }
 
@@ -528,6 +699,28 @@ export async function validateVersion(actor, versionId) {
           who: `${a.full_name} · ${a.assignment_date}${a.shift_name ? ` ${a.shift_name}` : ''}`,
           ruleName: f.name,
           message: f.message,
+        });
+      }
+    }
+
+    // סבב שבועי: מטמיע בסבב שמשובץ במיקום הסבב בסוג משמרת שאינו שלו השבוע
+    const rotations = await siteRotations(tx.query, version.site_id, version.week_start);
+    if (rotations.size > 0) {
+      const categories = new Map(
+        (await tx.query('select id, category::text as category from shift_types where site_id = $1', [version.site_id]))
+          .map((r) => [r.id, r.category]),
+      );
+      for (const a of assignments) {
+        const rot = rotations.get(a.user_id)?.locations.find((l) => l.locationId === a.location_id);
+        const category = categories.get(a.shift_type_id);
+        if (!rot || !category || category === rot.category) continue;
+        issues.push({
+          severity: 'warning',
+          assignmentId: a.id,
+          userId: a.user_id,
+          who: `${a.full_name} · ${a.assignment_date}${a.shift_name ? ` ${a.shift_name}` : ''}`,
+          ruleName: 'סבב שבועי',
+          message: `${rot.locationName} עובד שבוע־שבוע, ו${a.full_name} בסבב ${CATEGORY_NAMES[rot.category]} השבוע`,
         });
       }
     }

@@ -1,5 +1,5 @@
 import { query, withTransaction } from '../lib/db.js';
-import { toInstants } from '../lib/time.js';
+import { toInstants, weekDays, addDays } from '../lib/time.js';
 import { AppError } from '../lib/errors.js';
 import { evaluateAndExecute } from '../rules/exceptions.js';
 import { registerAction } from '../rules/actions.js';
@@ -350,6 +350,135 @@ export async function remove(actor, id) {
     });
 
     return { removed: id };
+  });
+}
+
+/* ───────────────────────── לו״ז הכשרה: מטמיעים × ימים ───────────────────────── */
+
+/**
+ * לפני העלייה לאוויר הלו״ז דינמי ונבנה מפעילויות: לכל מטמיע, בכל יום, מה הוא
+ * עושה. מחזיר את המטמיעים של האתר, את הפעילויות של השבוע עם המשתתפים שלהן,
+ * ואת השיבוצים מהגרסה האחרונה של הסידור לאותו שבוע — כדי שאפשר יהיה לראות
+ * התנגשויות לפני ששומרים.
+ */
+export async function board({ siteId, weekStart }) {
+  const days = weekDays(weekStart);
+  const to = addDays(weekStart, 6);
+
+  const [people, activities, participants, shifts, phaseRows] = await Promise.all([
+    query(
+      `select p.id, p.full_name, p.base_role::text as base_role,
+              (select string_agg(d.name, ', ' order by d.name) from user_domains ud
+                 join domains d on d.id = ud.domain_id
+                where ud.user_id = p.id and ud.deleted_at is null) as domains
+         from profiles p
+         join site_assignments sa on sa.user_id = p.id
+        where sa.site_id = $1 and sa.deleted_at is null
+          and sa.span && daterange($2::date, $3::date, '[]')
+          and p.status = 'active' and p.deleted_at is null
+          and p.base_role in ('implementer', 'lead')
+        order by p.full_name`,
+      [siteId, weekStart, to],
+    ),
+    query(
+      `${SELECT}
+         and a.site_id = $1 and a.activity_date between $2 and $3
+         and a.status not in ('cancelled', 'rejected')
+       order by a.activity_date, a.start_time`,
+      [siteId, weekStart, to],
+    ),
+    query(
+      `select ap.activity_id, ap.user_id, ap.attendance
+         from activity_participants ap
+         join activities a on a.id = ap.activity_id
+        where a.site_id = $1 and a.activity_date between $2 and $3 and a.deleted_at is null`,
+      [siteId, weekStart, to],
+    ),
+    query(
+      `select ra.id, ra.user_id, ra.assignment_date, ra.start_time, ra.end_time,
+              l.name as location_name, st.name as shift_name, v.status::text as version_status
+         from roster_assignments ra
+         join roster_versions v on v.id = ra.version_id
+         join locations l on l.id = ra.location_id
+         left join shift_types st on st.id = ra.shift_type_id
+        where v.site_id = $1 and v.week_start = $2 and v.deleted_at is null and ra.deleted_at is null
+          and v.version_number = (select max(version_number) from roster_versions
+                                   where site_id = $1 and week_start = $2 and deleted_at is null)
+        order by ra.assignment_date, ra.start_time`,
+      [siteId, weekStart],
+    ),
+    query(
+      `select d::date::text as day, app.site_period_on($1, d::date)::text as period
+         from generate_series($2::date, $2::date + 6, interval '1 day') d`,
+      [siteId, weekStart],
+    ),
+  ]);
+
+  const byActivity = new Map();
+  for (const p of participants) {
+    if (!byActivity.has(p.activity_id)) byActivity.set(p.activity_id, []);
+    byActivity.get(p.activity_id).push(p.user_id);
+  }
+
+  return {
+    weekStart,
+    days,
+    phases: Object.fromEntries(phaseRows.map((r) => [r.day, r.period])),
+    people,
+    activities: activities.map((a) => ({ ...a, participant_ids: byActivity.get(a.id) ?? [] })),
+    shifts,
+  };
+}
+
+/**
+ * שיוך שמי של מטמיע לפעילות, או הסרה ממנה — מהלו״ז.
+ * בפעילות שקהל היעד שלה הוא "משתתפים נבחרים", השיוך נשמר גם בקהל היעד, כך
+ * שעריכה של הפעילות בטופס לא תמחק אותו.
+ */
+export async function setParticipant(actor, activityId, { userId, present }) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const activity = await tx.lock('activities', activityId);
+    if (!activity || activity.deleted_at) throw new AppError('E_NOT_FOUND', 'הפעילות המבוקשת לא נמצאה');
+    if (['completed', 'cancelled'].includes(activity.status)) {
+      throw new AppError('E_STATE', 'הפעילות כבר הסתיימה או בוטלה');
+    }
+
+    if (present) {
+      if (activity.audience === 'users') {
+        await tx.query(
+          `insert into activity_audience (activity_id, audience, target_id) values ($1, 'users', $2)
+           on conflict do nothing`,
+          [activityId, userId],
+        );
+      }
+      const [added] = await tx.query(
+        `insert into activity_participants (activity_id, user_id, source)
+         values ($1, $2, $3) on conflict (activity_id, user_id) do nothing returning id`,
+        [activityId, userId, activity.audience === 'users' ? 'audience' : 'manual'],
+      );
+      if (added && activity.visibility === 'participants' && activity.status === 'scheduled') {
+        await notify(tx, {
+          typeCode: 'activity_changed',
+          recipientIds: [userId],
+          title: 'שובצת לפעילות',
+          body: `${activity.title ?? ''} · ${activity.activity_date} ${activity.start_time.slice(0, 5)}`,
+          entityType: 'activities',
+          entityId: activityId,
+        });
+      }
+    } else {
+      await tx.query(
+        `delete from activity_audience where activity_id = $1 and audience = 'users' and target_id = $2`,
+        [activityId, userId],
+      );
+      await tx.query('delete from activity_participants where activity_id = $1 and user_id = $2', [activityId, userId]);
+    }
+
+    const [{ count }] = await tx.query(
+      'select count(*)::int as count from activity_participants where activity_id = $1',
+      [activityId],
+    );
+    return { activityId, userId, present, participantCount: count };
   });
 }
 

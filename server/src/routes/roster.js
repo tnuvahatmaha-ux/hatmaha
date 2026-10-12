@@ -92,6 +92,42 @@ rosterRouter.patch(
   async (req, res) => res.json(await svc.setNote(req.user, req.params.id, req.body.note)),
 );
 
+/** שעות אישיות לשיבוץ אחד. בלי שעות — חזרה לשעות של התא */
+rosterRouter.patch(
+  '/assignments/:id/hours',
+  requirePermission('roster', 'edit', assignmentScope),
+  validate({
+    params: idParam,
+    body: z.object({ startTime: timeStr.nullish(), endTime: timeStr.nullish() })
+      .refine((v) => (v.startTime == null) === (v.endTime == null), 'יש לציין גם שעת התחלה וגם שעת סיום'),
+  }),
+  async (req, res) => res.json({ assignment: await svc.setAssignmentHours(req.user, req.params.id, req.body, req) }),
+);
+
+/** שינוי שעות של משמרת במיקום ביום מסוים — לכל המשובצים בה */
+rosterRouter.put(
+  '/versions/:versionId/shift-overrides',
+  requirePermission('roster', 'edit', versionScope),
+  validate({
+    params: z.object({ versionId: uuid }),
+    body: z.object({
+      shiftTypeId: uuid,
+      date: dateStr,
+      startTime: timeStr,
+      endTime: timeStr,
+      note: z.string().trim().max(300).nullish(),
+    }).refine((v) => v.startTime !== v.endTime, { message: 'שעת הסיום זהה לשעת ההתחלה', path: ['endTime'] }),
+  }),
+  async (req, res) => res.json(await svc.setShiftOverride(req.user, req.params.versionId, req.body)),
+);
+
+rosterRouter.delete(
+  '/versions/:versionId/shift-overrides/:overrideId',
+  requirePermission('roster', 'edit', versionScope),
+  validate({ params: z.object({ versionId: uuid, overrideId: uuid }) }),
+  async (req, res) => res.json(await svc.removeShiftOverride(req.user, req.params.versionId, req.params.overrideId)),
+);
+
 rosterRouter.delete(
   '/assignments/:id',
   requirePermission('roster', 'delete', assignmentScope),

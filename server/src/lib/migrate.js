@@ -33,6 +33,7 @@ export const MARKERS = {
          where table_name = 'updates' and column_name = 'requires_ack') as ok`,
   21: `select exists (select 1 from information_schema.tables where table_name = 'chat_groups') as ok`,
   22: `select exists (select 1 from information_schema.tables where table_name = 'skill_scores') as ok`,
+  23: `select exists (select 1 from information_schema.tables where table_name = 'user_rotations') as ok`,
 };
 
 export async function runPendingMigrations() {

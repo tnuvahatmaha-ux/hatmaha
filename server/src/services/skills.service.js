@@ -51,10 +51,10 @@ export async function saveTopic(actor, input) {
       const [row] = await tx.query(
         `update skill_topics set name = coalesce($2, name), description = $3,
                 sub_category_id = $4, is_active = coalesce($5, is_active),
-                display_order = coalesce($6, display_order)
+                display_order = coalesce($6, display_order), domain_id = coalesce($7, domain_id)
           where id = $1 and deleted_at is null returning *`,
         [input.id, input.name ?? null, input.description ?? null, input.subCategoryId ?? null,
-         input.isActive ?? null, input.displayOrder ?? null],
+         input.isActive ?? null, input.displayOrder ?? null, input.domainId ?? null],
       );
       if (!row) throw new AppError('E_NOT_FOUND', 'הנושא המבוקש לא נמצא');
       return row;
@@ -206,6 +206,16 @@ export async function saveEndUser(actor, siteId, input) {
   });
 }
 
+/** מחיקה רכה: הציונים של סבבים קודמים נשארים במסד, אבל המשתמש יוצא מהטבלאות ומהדוחות */
+export async function deleteEndUser(actor, endUserId) {
+  const [row] = await query(
+    'update end_users set deleted_at = now(), deleted_by = $2 where id = $1 and deleted_at is null returning id',
+    [endUserId, actor.userId],
+  );
+  if (!row) throw new AppError('E_NOT_FOUND', 'משתמש הקצה המבוקש לא נמצא');
+  return { removed: endUserId };
+}
+
 /* ───────────────────────── סבבים ───────────────────────── */
 
 export async function listRounds({ siteId }) {
@@ -275,6 +285,29 @@ export async function saveRound(actor, input) {
         entityId: round.id,
       });
     }
+    return round;
+  });
+}
+
+/** שכפול סבב: אותם נושאים, סבב חדש בטיוטה — בלי ציונים ובלי הערות */
+export async function duplicateRound(actor, roundId, { name } = {}) {
+  const source = await getRound(roundId);
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const [round] = await tx.query(
+      `insert into skill_rounds (site_id, name, round_no, status)
+       values ($1, $2,
+               (select coalesce(max(round_no), 0) + 1 from skill_rounds where site_id = $1 and deleted_at is null),
+               'draft')
+       returning *`,
+      [source.site_id, name?.trim() || `${source.name} (עותק)`],
+    );
+    await tx.query(
+      `insert into skill_round_topics (round_id, topic_id)
+       select $1, rt.topic_id from skill_round_topics rt
+         join skill_topics t on t.id = rt.topic_id and t.deleted_at is null
+        where rt.round_id = $2`,
+      [round.id, roundId],
+    );
     return round;
   });
 }
@@ -470,6 +503,120 @@ export async function summary({ siteId, roundId }) {
       .sort((a, b) => a.avg_score - b.avg_score)
       .slice(0, 10),
   };
+}
+
+/* ───────────────────────── התקדמות לאורך הסבבים ───────────────────────── */
+
+/**
+ * ממוצע של כל משתמש קצה בכל סבב באתר — כולל סבבים שנסגרו — והשינוי בין
+ * הסבב הראשון שבו דורג לאחרון. מטמיע רואה רק את התחומים שלו.
+ */
+export async function progress(principal, { siteId, domainId }) {
+  const domains = domainFilter(principal);
+  const [rounds, users, avgs, topicAvgs] = await Promise.all([
+    query(
+      `select id, name, round_no, status, opens_on, closes_on from skill_rounds
+        where site_id = $1 and deleted_at is null and status <> 'draft'
+        order by round_no, created_at`,
+      [siteId],
+    ),
+    query(
+      `select eu.id, eu.full_name, eu.employee_no, eu.department, eu.domain_id, d.name as domain_name,
+              sc.name as sub_category_name
+         from end_users eu
+         left join domains d on d.id = eu.domain_id
+         left join sub_categories sc on sc.id = eu.sub_category_id
+        where eu.site_id = $1 and eu.deleted_at is null
+          and ($2::uuid is null or eu.domain_id = $2)
+          and ($3::uuid[] is null or eu.domain_id = any($3))
+        order by d.display_order nulls last, d.name nulls last, eu.full_name`,
+      [siteId, domainId ?? null, domains],
+    ),
+    query(
+      `select v.round_id, v.end_user_id, v.avg_score, v.rated_count, v.min_score
+         from v_skill_summary v join skill_rounds r on r.id = v.round_id and r.deleted_at is null
+        where r.site_id = $1`,
+      [siteId],
+    ),
+    query(
+      `select s.round_id, s.end_user_id, t.id as topic_id, t.name as topic_name, s.score
+         from skill_scores s
+         join skill_rounds r on r.id = s.round_id and r.deleted_at is null and r.site_id = $1
+         join skill_topics t on t.id = s.topic_id
+        order by t.display_order, t.name`,
+      [siteId],
+    ),
+  ]);
+
+  const avgMap = new Map(avgs.map((a) => [`${a.end_user_id}|${a.round_id}`, a]));
+  const topicsByUser = new Map();
+  for (const t of topicAvgs) {
+    const list = topicsByUser.get(t.end_user_id) ?? [];
+    list.push(t);
+    topicsByUser.set(t.end_user_id, list);
+  }
+
+  const rows = users.map((u) => {
+    const perRound = rounds.map((r) => {
+      const a = avgMap.get(`${u.id}|${r.id}`);
+      return a ? { roundId: r.id, avg: Number(a.avg_score), rated: a.rated_count, min: a.min_score } : null;
+    });
+    const rated = perRound.filter(Boolean);
+    const first = rated[0];
+    const last = rated[rated.length - 1];
+
+    // פירוט לפי נושא: הציון בכל סבב
+    const topics = new Map();
+    for (const t of topicsByUser.get(u.id) ?? []) {
+      const entry = topics.get(t.topic_id) ?? { topicId: t.topic_id, name: t.topic_name, scores: {} };
+      entry.scores[t.round_id] = t.score;
+      topics.set(t.topic_id, entry);
+    }
+
+    return {
+      ...u,
+      rounds: perRound,
+      first: first?.avg ?? null,
+      last: last?.avg ?? null,
+      delta: first && last && first !== last ? Math.round((last.avg - first.avg) * 100) / 100 : null,
+      topics: [...topics.values()],
+    };
+  });
+
+  return { rounds, users: rows };
+}
+
+export async function exportProgress(principal, { siteId, domainId }) {
+  const data = await progress(principal, { siteId, domainId });
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'המטמיעון';
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet('התקדמות', { views: [{ rightToLeft: true, state: 'frozen', xSplit: 1, ySplit: 1 }] });
+  ws.columns = [
+    { header: 'שם', key: 'name', width: 24 },
+    { header: 'מספר עובד', key: 'no', width: 12 },
+    { header: 'תחום', key: 'domain', width: 16 },
+    { header: 'מחלקה', key: 'dept', width: 16 },
+    ...data.rounds.map((r) => ({ header: r.name, key: r.id, width: 14 })),
+    { header: 'שינוי', key: 'delta', width: 10 },
+  ];
+  ws.getRow(1).font = { bold: true };
+  ws.getRow(1).alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
+
+  for (const u of data.users) {
+    const values = { name: u.full_name, no: u.employee_no ?? '', domain: u.domain_name ?? '', dept: u.department ?? '' };
+    data.rounds.forEach((r, i) => { values[r.id] = u.rounds[i]?.avg ?? ''; });
+    values.delta = u.delta ?? '';
+    const row = ws.addRow(values);
+    data.rounds.forEach((r, i) => {
+      const v = u.rounds[i]?.avg;
+      const cell = row.getCell(5 + i);
+      cell.alignment = { horizontal: 'center' };
+      if (v) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SCORE_FILL[Math.min(4, Math.max(1, Math.round(v)))] } };
+    });
+  }
+  return { buffer: await wb.xlsx.writeBuffer(), filename: 'סקילומטר - התקדמות.xlsx' };
 }
 
 /* ───────────────────────── ייצוא לאקסל ───────────────────────── */

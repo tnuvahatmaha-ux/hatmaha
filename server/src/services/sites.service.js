@@ -1,6 +1,8 @@
 import { query, withTransaction } from '../lib/db.js';
 import { assertIfMatch } from '../lib/etag.js';
 import { AppError } from '../lib/errors.js';
+import { weekStartOf, addDays, today } from '../lib/time.js';
+import { siteRotations } from './rotation.js';
 
 /** רשימת אתרים, מסוננת ל-Scope של המשתמש */
 export async function list(principal, { includeArchived = false } = {}) {
@@ -44,7 +46,8 @@ export async function get(siteId) {
     ),
     query(
       `select l.id, l.name, l.description, l.capacity, l.is_active, l.location_type_id,
-              lt.name as location_type_name, l.periods::text[] as periods, l.row_version
+              lt.name as location_type_name, l.periods::text[] as periods,
+              l.rotation_cycle::text[] as rotation_cycle, l.row_version
          from locations l
          left join location_types lt on lt.id = l.location_type_id
         where l.site_id = $1 and l.deleted_at is null
@@ -424,11 +427,12 @@ export async function saveLocation(actor, siteId, input, req) {
            name = coalesce($2, name), description = coalesce($3, description),
            location_type_id = coalesce($4, location_type_id), capacity = $5,
            is_active = coalesce($6, is_active),
-           periods = coalesce($7::period_code[], periods)
+           periods = coalesce($7::period_code[], periods),
+           rotation_cycle = case when $8 then $9::shift_category[] else rotation_cycle end
          where id = $1 returning *`,
         [input.id, input.name ?? null, input.description ?? null,
          input.locationTypeId ?? null, input.capacity ?? null, input.isActive ?? null,
-         input.periods ?? null],
+         input.periods ?? null, input.rotationCycle !== undefined, input.rotationCycle ?? null],
       );
       return row;
     }
@@ -437,11 +441,11 @@ export async function saveLocation(actor, siteId, input, req) {
     const locationTypeId = input.locationTypeId ?? (await catalogEntryFor(tx, input.name));
 
     const [row] = await tx.query(
-      `insert into locations (site_id, name, description, location_type_id, capacity, periods)
-       values ($1, $2, $3, $4, $5, coalesce($6::period_code[], '{training,golive,support}'))
+      `insert into locations (site_id, name, description, location_type_id, capacity, periods, rotation_cycle)
+       values ($1, $2, $3, $4, $5, coalesce($6::period_code[], '{training,golive,support}'), $7::shift_category[])
        returning *`,
       [siteId, input.name, input.description ?? null, locationTypeId, input.capacity ?? null,
-       input.periods ?? null],
+       input.periods ?? null, input.rotationCycle ?? null],
     );
 
     // מיקום מהמאגר נולד עם המשמרות שלו לכל שלב, כדי שלא יתחיל ריק
@@ -467,6 +471,84 @@ async function catalogEntryFor(tx, name) {
     );
   }
   return created.id;
+}
+
+/* ───────────────────────── סבב שבועי ───────────────────────── */
+
+/** המטמיעים בסבב באתר, עם הסוג של כל אחד בשבוע הנוכחי ובשבוע הבא */
+export async function rotations(siteId) {
+  const [site] = await query('select timezone from sites where id = $1', [siteId]);
+  const thisWeek = weekStartOf(today(site?.timezone));
+  const nextWeek = addDays(thisWeek, 7);
+
+  const [rows, now, next] = await Promise.all([
+    query(
+      `select ur.id, ur.user_id, ur.location_id, ur.anchor_week, ur.anchor_category::text as anchor_category,
+              ur.row_version, p.full_name, l.name as location_name
+         from user_rotations ur
+         join profiles p on p.id = ur.user_id
+         join locations l on l.id = ur.location_id
+        where ur.site_id = $1 and ur.deleted_at is null
+        order by l.name, p.full_name`,
+      [siteId],
+    ),
+    siteRotations(query, siteId, thisWeek),
+    siteRotations(query, siteId, nextWeek),
+  ]);
+
+  const categoryAt = (map, r) => map.get(r.user_id)?.locations.find((l) => l.locationId === r.location_id) ?? null;
+  return {
+    thisWeek,
+    nextWeek,
+    rotations: rows.map((r) => ({
+      ...r,
+      thisWeek: categoryAt(now, r),
+      nextWeek: categoryAt(next, r),
+    })),
+  };
+}
+
+/** החלפת רשימת המטמיעים בסבב באתר במלואה */
+export async function replaceRotations(actor, siteId, list) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const locations = await tx.query(
+      `select id from locations where site_id = $1 and deleted_at is null and rotation_cycle is not null`,
+      [siteId],
+    );
+    const valid = new Set(locations.map((l) => l.id));
+    for (const r of list) {
+      if (!valid.has(r.locationId)) {
+        throw new AppError('E_VALIDATION', 'אפשר לשייך לסבב רק מיקום שהוגדר בו סדר סבב שבועי');
+      }
+    }
+
+    const keep = list.map((r) => `${r.userId}|${r.locationId}`);
+    await tx.query(
+      `update user_rotations set deleted_at = now(), deleted_by = $2
+        where site_id = $1 and deleted_at is null
+          and not ((user_id::text || '|' || location_id::text) = any($3::text[]))`,
+      [siteId, actor.userId, keep],
+    );
+
+    for (const r of list) {
+      const weekStart = weekStartOf(r.anchorWeek);
+      const [updated] = await tx.query(
+        `update user_rotations set anchor_week = $3, anchor_category = $4::shift_category
+          where user_id = $1 and location_id = $2 and deleted_at is null
+            and (anchor_week, anchor_category) is distinct from ($3::date, $4::shift_category)
+          returning id`,
+        [r.userId, r.locationId, weekStart, r.anchorCategory],
+      );
+      if (updated) continue;
+      await tx.query(
+        `insert into user_rotations (site_id, location_id, user_id, anchor_week, anchor_category)
+         select $1, $2, $3, $4, $5::shift_category
+          where not exists (select 1 from user_rotations
+                             where user_id = $3 and location_id = $2 and deleted_at is null)`,
+        [siteId, r.locationId, r.userId, weekStart, r.anchorCategory],
+      );
+    }
+  }).then(() => rotations(siteId));
 }
 
 /* ───────────────────────── תקופות ───────────────────────── */
