@@ -78,8 +78,32 @@ chatRouter.get(
 chatRouter.post(
   '/groups/:id/messages',
   requirePermission('chat', 'create'),
-  validate({ params: idParam, body: z.object({ body: z.string().trim().min(1).max(4000) }) }),
-  async (req, res) => res.status(201).json({ message: await svc.send(req.user, req.params.id, req.body.body) }),
+  validate({
+    params: idParam,
+    body: z.object({ body: z.string().trim().min(1).max(4000), requiresAck: z.boolean().default(false) }),
+  }),
+  async (req, res) =>
+    res.status(201).json({
+      message: await svc.send(req.user, req.params.id, req.body.body, { requiresAck: req.body.requiresAck }),
+    }),
+);
+
+const messageParams = z.object({ id: uuid, messageId: z.coerce.number().int().positive() });
+
+chatRouter.post(
+  '/groups/:id/messages/:messageId/ack',
+  requirePermission('chat', 'view'),
+  validate({ params: messageParams }),
+  async (req, res) =>
+    res.json({ message: await svc.acknowledge(req.user, req.params.id, req.params.messageId) }),
+);
+
+chatRouter.get(
+  '/groups/:id/messages/:messageId/acks',
+  requirePermission('chat', 'view'),
+  validate({ params: messageParams }),
+  async (req, res) =>
+    res.json({ members: await svc.acks(req.user, req.params.id, req.params.messageId) }),
 );
 
 chatRouter.post(

@@ -10,7 +10,8 @@ import { notify } from '../notifications/service.js';
  * `after` = מזהה ההודעה האחרונה שראה, ולכן כל רענון מחזיר רק את מה שחדש.
  *
  * התראה על הודעה חדשה נשלחת פעם אחת לכל נמען לכל קבוצה עד שיקרא (dedupe),
- * כדי שצ׳אט פעיל לא יציף את מסך ההתראות.
+ * כדי שצ׳אט פעיל לא יציף את מסך ההתראות. הודעה שדורשת אישור קריאה שולחת
+ * התראה משלה תמיד.
  */
 
 const isManager = (p) => p.baseRole === 'manager';
@@ -43,6 +44,11 @@ export async function listGroups(principal) {
             (select count(*)::int from chat_messages cm
               where cm.group_id = g.id and cm.deleted_at is null and cm.author_user_id <> $1
                 and cm.created_at > coalesce(m.last_read_at, '-infinity')) as unread,
+            (select count(*)::int from chat_messages cm
+              where cm.group_id = g.id and cm.deleted_at is null and cm.requires_ack
+                and cm.author_user_id <> $1
+                and not exists (select 1 from chat_message_acks a
+                                 where a.message_id = cm.id and a.user_id = $1)) as pending_ack,
             last.body as last_body, last.created_at as last_at, last.author_name as last_author
        from chat_groups g
        join chat_group_members m on m.group_id = g.id and m.user_id = $1
@@ -140,30 +146,79 @@ export async function members(principal, groupId) {
   );
 }
 
+/** מצב האישור של הודעה: כמה אישרו, מתוך כמה חברים (בלי השולח), והאם אני אישרתי */
+const ACK_COLUMNS = `
+  (select count(*)::int from chat_message_acks a where a.message_id = cm.id) as ack_count,
+  (select count(*)::int from chat_group_members x
+    where x.group_id = cm.group_id and x.user_id <> cm.author_user_id) as ack_total,
+  exists (select 1 from chat_message_acks a
+           where a.message_id = cm.id and a.user_id = $USER) as acked_by_me`;
+
 export async function messages(principal, groupId, { after, limit = 100 }) {
   const group = await requireMember(query, groupId, principal.userId);
   const rows = await query(
     `select * from (
-       select cm.id, cm.body, cm.created_at, cm.author_user_id, p.full_name as author_name
+       select cm.id, cm.body, cm.created_at, cm.author_user_id, p.full_name as author_name,
+              cm.requires_ack, ${ACK_COLUMNS.replaceAll('$USER', '$4')}
          from chat_messages cm join profiles p on p.id = cm.author_user_id
         where cm.group_id = $1 and cm.deleted_at is null and ($2::bigint is null or cm.id > $2)
         order by cm.id desc limit $3) t
       order by id`,
-    [groupId, after ?? null, limit],
+    [groupId, after ?? null, limit, principal.userId],
   );
-  return { group: { id: group.id, name: group.name, kind: group.kind, myRole: group.my_role }, messages: rows };
+  // הרענון מביא רק הודעות חדשות, ולכן מצב האישורים של הודעות קודמות נשלח בנפרד
+  const acks = after
+    ? await query(
+        `select cm.id, ${ACK_COLUMNS.replaceAll('$USER', '$2')}
+           from chat_messages cm
+          where cm.group_id = $1 and cm.deleted_at is null and cm.requires_ack
+          order by cm.id desc limit 100`,
+        [groupId, principal.userId],
+      )
+    : [];
+  return {
+    group: { id: group.id, name: group.name, kind: group.kind, myRole: group.my_role },
+    messages: rows,
+    acks,
+  };
 }
 
-export async function send(actor, groupId, body) {
+export async function send(actor, groupId, body, { requiresAck = false } = {}) {
+  if (requiresAck && actor.baseRole === 'implementer') {
+    throw new AppError('E_FORBIDDEN', 'מטמיע אינו יכול לבקש אישור קריאה');
+  }
   return withTransaction({ actorId: actor.userId }, async (tx) => {
     const group = await requireMember(tx.query, groupId, actor.userId);
     if (group.is_archived) throw new AppError('E_STATE', 'הקבוצה בארכיון');
 
     const [row] = await tx.query(
-      `insert into chat_messages (group_id, author_user_id, body) values ($1, $2, $3)
-       returning id, body, created_at, author_user_id`,
-      [groupId, actor.userId, body],
+      `insert into chat_messages (group_id, author_user_id, body, requires_ack) values ($1, $2, $3, $4)
+       returning id, body, created_at, author_user_id, requires_ack`,
+      [groupId, actor.userId, body, requiresAck],
     );
+
+    if (requiresAck) {
+      const members = await tx.query(
+        'select user_id from chat_group_members where group_id = $1 and user_id <> $2',
+        [groupId, actor.userId],
+      );
+      await notify(tx, {
+        typeCode: 'chat_ack_required',
+        recipientIds: members.map((m) => m.user_id),
+        title: `נדרש אישור קריאה בקבוצה ${group.name}`,
+        body: `${actor.fullName}: ${body.slice(0, 120)}`,
+        entityType: 'chat_groups',
+        entityId: groupId,
+      });
+      await tx.query(
+        'update chat_group_members set last_read_at = now() where group_id = $1 and user_id = $2',
+        [groupId, actor.userId],
+      );
+      return {
+        ...row, author_name: actor.fullName,
+        ack_count: 0, ack_total: members.length, acked_by_me: false,
+      };
+    }
     await tx.query(
       'update chat_group_members set last_read_at = now() where group_id = $1 and user_id = $2',
       [groupId, actor.userId],
@@ -189,6 +244,63 @@ export async function send(actor, groupId, body) {
 
     return { ...row, author_name: actor.fullName };
   });
+}
+
+export async function acknowledge(principal, groupId, messageId) {
+  await requireMember(query, groupId, principal.userId);
+  const [msg] = await query(
+    `select id, author_user_id, requires_ack from chat_messages
+      where id = $1 and group_id = $2 and deleted_at is null`,
+    [messageId, groupId],
+  );
+  if (!msg) throw new AppError('E_NOT_FOUND', 'ההודעה המבוקשת לא נמצאה');
+  if (!msg.requires_ack) throw new AppError('E_STATE', 'בהודעה הזו לא התבקש אישור קריאה');
+  if (msg.author_user_id === principal.userId) throw new AppError('E_STATE', 'זו הודעה ששלחת');
+
+  await query(
+    `insert into chat_message_acks (message_id, user_id) values ($1, $2)
+     on conflict do nothing`,
+    [messageId, principal.userId],
+  );
+  // כשאין עוד הודעות שממתינות לאישורי, התראת האישור נסגרת
+  await query(
+    `update notifications set read_at = now()
+      where recipient_user_id = $1 and type_code = 'chat_ack_required' and entity_id = $2
+        and read_at is null
+        and not exists (select 1 from chat_messages cm
+                         where cm.group_id = $2 and cm.requires_ack and cm.deleted_at is null
+                           and cm.author_user_id <> $1
+                           and not exists (select 1 from chat_message_acks a
+                                            where a.message_id = cm.id and a.user_id = $1))`,
+    [principal.userId, groupId],
+  );
+  const [row] = await query(
+    `select cm.id, ${ACK_COLUMNS.replaceAll('$USER', '$2')} from chat_messages cm where cm.id = $1`,
+    [messageId, principal.userId],
+  );
+  return row;
+}
+
+/** מי אישר ומי עוד לא — לשולח ההודעה ולמנהלים */
+export async function acks(principal, groupId, messageId) {
+  await requireMember(query, groupId, principal.userId);
+  const [msg] = await query(
+    'select author_user_id from chat_messages where id = $1 and group_id = $2 and deleted_at is null',
+    [messageId, groupId],
+  );
+  if (!msg) throw new AppError('E_NOT_FOUND', 'ההודעה המבוקשת לא נמצאה');
+  if (msg.author_user_id !== principal.userId && !isManager(principal)) {
+    throw new AppError('E_FORBIDDEN', 'רק מי ששלח את ההודעה רואה מי אישר אותה');
+  }
+  return query(
+    `select p.id, p.full_name, a.acknowledged_at
+       from chat_group_members m
+       join profiles p on p.id = m.user_id
+       left join chat_message_acks a on a.message_id = $1 and a.user_id = m.user_id
+      where m.group_id = $2 and m.user_id <> $3
+      order by a.acknowledged_at nulls first, p.full_name`,
+    [messageId, groupId, msg.author_user_id],
+  );
 }
 
 export async function markRead(principal, groupId) {

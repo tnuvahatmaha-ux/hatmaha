@@ -36,6 +36,7 @@ export const MARKERS = {
   23: `select exists (select 1 from information_schema.tables where table_name = 'user_rotations') as ok`,
   24: `select exists (select 1 from information_schema.columns
          where table_name = 'activities' and column_name = 'series_id') as ok`,
+  25: `select exists (select 1 from information_schema.tables where table_name = 'chat_message_acks') as ok`,
 };
 
 export async function runPendingMigrations() {

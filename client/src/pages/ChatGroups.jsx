@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Send, Plus, Users, ChevronRight } from 'lucide-react';
+import { Send, Plus, Users, ChevronRight, BadgeCheck, Check } from 'lucide-react';
 import { useApi, useAction } from '../lib/useApi.js';
 import { get, post } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
@@ -66,6 +66,12 @@ export function ChatGroups({ canCreate }) {
                     {g.last_body ? `${g.last_author}: ${g.last_body}` : `${KIND_NAMES[g.kind]} · ${g.member_count} משתתפים`}
                   </div>
                 </div>
+                {g.pending_ack > 0 && (
+                  <span className="ack-dot" title="הודעות שממתינות לאישור הקריאה שלך"
+                    aria-label={`${g.pending_ack} הודעות ממתינות לאישור קריאה`}>
+                    <BadgeCheck size={13} /> {g.pending_ack}
+                  </span>
+                )}
                 {g.unread > 0 && <span className="nav-badge" aria-label={`${g.unread} הודעות שלא נקראו`}>{g.unread}</span>}
               </button>
             ))}
@@ -93,7 +99,11 @@ export function ChatGroups({ canCreate }) {
 
 function Conversation({ group, onBack, onRead }) {
   const toast = useToast();
-  const { profile } = usePermissions();
+  const { profile, role } = usePermissions();
+  // כל משתמש חוץ ממטמיע יכול לבקש מהקבוצה אישור קריאה על ההודעה שלו
+  const canRequestAck = role && role !== 'implementer';
+  const [requiresAck, setRequiresAck] = useState(false);
+  const [ackListFor, setAckListFor] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -108,6 +118,10 @@ function Conversation({ group, onBack, onRead }) {
       try {
         const data = await get(`/api/chat/groups/${group.id}/messages`, lastId.current ? { after: lastId.current } : {});
         if (!active) return;
+        if (data.acks?.length) {
+          const byId = new Map(data.acks.map((a) => [a.id, a]));
+          setMessages((m) => m.map((msg) => (byId.has(msg.id) ? { ...msg, ...byId.get(msg.id) } : msg)));
+        }
         if (data.messages.length) {
           lastId.current = data.messages[data.messages.length - 1].id;
           setMessages((m) => [...m, ...data.messages]);
@@ -133,12 +147,22 @@ function Conversation({ group, onBack, onRead }) {
     async () => {
       const body = text.trim();
       if (!body) return;
-      const { message } = await post(`/api/chat/groups/${group.id}/messages`, { body });
+      const { message } = await post(`/api/chat/groups/${group.id}/messages`, { body, requiresAck });
       setText('');
+      setRequiresAck(false);
       if (!lastId.current || message.id > lastId.current) {
         lastId.current = message.id;
         setMessages((m) => [...m, message]);
       }
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const acknowledge = useAction(
+    async (id) => {
+      const { message } = await post(`/api/chat/groups/${group.id}/messages/${id}/ack`);
+      setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, ...message } : msg)));
+      onRead();
     },
     { onError: (err) => toast.error(err) },
   );
@@ -170,8 +194,29 @@ function Conversation({ group, onBack, onRead }) {
                 {!mine && sameAsPrev && <span style={{ width: 26 }} />}
                 <div className="bubble">
                   {!mine && !sameAsPrev && <div className="bubble-author">{m.author_name}</div>}
+                  {m.requires_ack && (
+                    <div className="bubble-ack-label"><BadgeCheck size={13} /> נדרש אישור קריאה</div>
+                  )}
                   <div className="bubble-text">{m.body}</div>
                   <div className="bubble-time">{fmtTime(m.created_at)}</div>
+                  {m.requires_ack && (mine || role === 'manager' ? (
+                    <button type="button" className="bubble-ack-status" onClick={() => setAckListFor(m)}>
+                      {m.ack_count >= m.ack_total && m.ack_total > 0
+                        ? <><Check size={13} /> כולם אישרו</>
+                        : `${m.ack_count} מתוך ${m.ack_total} אישרו`}
+                      {!mine && m.acked_by_me && ' · אישרת'}
+                    </button>
+                  ) : null)}
+                  {m.requires_ack && !mine && (
+                    m.acked_by_me ? (
+                      role !== 'manager' && <div className="bubble-ack-done"><Check size={13} /> אישרת קריאה</div>
+                    ) : (
+                      <button type="button" className="btn btn-sm btn-primary bubble-ack-btn"
+                        onClick={() => acknowledge.run(m.id)} disabled={acknowledge.busy}>
+                        <Check size={14} /> קראתי
+                      </button>
+                    )
+                  )}
                 </div>
               </div>
             );
@@ -180,7 +225,24 @@ function Conversation({ group, onBack, onRead }) {
         </StateView>
       </div>
 
+      {requiresAck && (
+        <div className="chat-ack-note">
+          <BadgeCheck size={15} /> ההודעה תישלח עם בקשת אישור קריאה מכל חברי הקבוצה
+        </div>
+      )}
       <form className="chat-compose" onSubmit={(e) => { e.preventDefault(); send.run(); }}>
+        {canRequestAck && (
+          <button
+            type="button"
+            className={`btn btn-icon chat-ack-toggle${requiresAck ? ' on' : ''}`}
+            aria-pressed={requiresAck}
+            aria-label="בקשת אישור קריאה"
+            title="בקשת אישור קריאה"
+            onClick={() => setRequiresAck((v) => !v)}
+          >
+            <BadgeCheck size={18} />
+          </button>
+        )}
         <textarea
           value={text}
           rows={1}
@@ -196,7 +258,47 @@ function Conversation({ group, onBack, onRead }) {
           <Send size={17} />
         </button>
       </form>
+
+      {ackListFor && (
+        <AckList groupId={group.id} message={ackListFor} onClose={() => setAckListFor(null)} />
+      )}
     </Panel>
+  );
+}
+
+/** מי אישר את קריאת ההודעה ומי עוד לא */
+function AckList({ groupId, message, onClose }) {
+  const list = useApi(`/api/chat/groups/${groupId}/messages/${message.id}/acks`);
+  const members = list.data?.members ?? [];
+  const pending = members.filter((m) => !m.acknowledged_at);
+  const done = members.filter((m) => m.acknowledged_at);
+
+  return (
+    <Modal title="אישורי קריאה" onClose={onClose} width={460}
+      footer={<button type="button" className="btn" onClick={onClose}>סגירה</button>}>
+      <p className="small muted" style={{ marginBlockStart: 0, whiteSpace: 'pre-wrap' }}>
+        {message.body.length > 160 ? `${message.body.slice(0, 160)}…` : message.body}
+      </p>
+      <StateView loading={list.loading} error={list.error} onRetry={list.reload}>
+        <h4 style={{ marginBlockEnd: 'var(--space-2)' }}>עוד לא אישרו ({pending.length})</h4>
+        {pending.length ? (
+          <div className="row" style={{ gap: 6 }}>
+            {pending.map((m) => <Tag key={m.id} tone="warn">{m.full_name}</Tag>)}
+          </div>
+        ) : <p className="small muted">כולם אישרו 🎉</p>}
+        <h4 style={{ marginBlockEnd: 'var(--space-2)' }}>אישרו ({done.length})</h4>
+        {done.length ? (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {done.map((m) => (
+              <li key={m.id} className="row" style={{ justifyContent: 'space-between', paddingBlock: 4 }}>
+                <span>{m.full_name}</span>
+                <span className="small muted">{fmtRelative(m.acknowledged_at)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="small muted">עדיין אף אחד</p>}
+      </StateView>
+    </Modal>
   );
 }
 
