@@ -23,7 +23,8 @@ const PERSON_SELECT = `
                      from user_sub_categories usc join sub_categories sc on sc.id = usc.sub_category_id
                     where usc.user_id = p.id and usc.deleted_at is null), '[]') as sub_categories,
          coalesce((select json_agg(json_build_object('id', m.id, 'name', m.full_name,
-                    'isPrimary', ma.is_primary))
+                    'isPrimary', ma.is_primary, 'assignmentId', ma.id)
+                    order by ma.is_primary desc, m.full_name)
                      from mentor_assignments ma join profiles m on m.id = ma.mentor_user_id
                     where ma.implementer_user_id = p.id and ma.deleted_at is null
                       and ma.span @> current_date), '[]') as mentors
@@ -398,8 +399,10 @@ async function assertMentorCovers(tx, mentorId, { siteId, domainIds, subCategory
        from mentor_responsibilities r
       where r.mentor_user_id = $1 and r.deleted_at is null and r.span @> current_date
         and (r.site_id is null or r.site_id = $2)
-        and (r.domain_id is null or r.domain_id = any($3::uuid[]))
-        and (r.sub_category_id is null or r.sub_category_id = any($4::uuid[]))`,
+        -- מספיק תחום אחד או תת-קטגוריה אחת משותפים
+        and ((r.domain_id is null and r.sub_category_id is null)
+             or r.domain_id = any($3::uuid[])
+             or r.sub_category_id = any($4::uuid[]))`,
     [mentorId, siteId ?? null, domainIds ?? [], subCategoryIds ?? []],
   );
 
@@ -496,14 +499,17 @@ export async function assignMentor(actor, { mentorUserId, implementerUserId, isP
 }
 
 registerAction('mentors.assign', async (tx, { mentorUserId, implementerUserId, isPrimary }) => {
-  // מדריך ראשי חדש מסיים את הקודם, כדי שמגבלת ה-EXCLUDE לא תיפול
-  if (isPrimary) {
-    await tx.query(
-      `update mentor_assignments set to_date = current_date - 1
-        where implementer_user_id = $1 and is_primary and deleted_at is null
-          and span @> current_date`,
-      [implementerUserId],
-    );
+  // מדריך ראשי חדש מסיים את הקודם, וכל שיוך קיים של אותו זוג מוחלף —
+  // כדי שמגבלות ה-EXCLUDE לא ייפלו (למשל תומך שהופך לראשי)
+  const ending = await tx.query(
+    `select id, mentor_user_id from mentor_assignments
+      where implementer_user_id = $1 and deleted_at is null and span @> current_date
+        and (mentor_user_id = $2 or ($3 and is_primary))`,
+    [implementerUserId, mentorUserId, isPrimary],
+  );
+  for (const old of ending) {
+    await closeAssignment(tx, old.id);
+    invalidatePrincipal(old.mentor_user_id);
   }
 
   const [row] = await tx.query(
@@ -526,14 +532,25 @@ registerAction('mentors.assign', async (tx, { mentorUserId, implementerUserId, i
   return row;
 });
 
+/**
+ * סיום שיוך כך שלא יהיה פעיל עוד היום.
+ * שיוך שהתחיל היום נמחק רך — אחרת to_date היה קודם ל-from_date.
+ */
+async function closeAssignment(tx, assignmentId) {
+  const [row] = await tx.query(
+    `update mentor_assignments
+        set to_date    = case when from_date < current_date then current_date - 1 else to_date end,
+            deleted_at = case when from_date < current_date then deleted_at else now() end
+      where id = $1 and deleted_at is null
+      returning mentor_user_id, implementer_user_id`,
+    [assignmentId],
+  );
+  return row;
+}
+
 export async function endMentorAssignment(actor, assignmentId) {
   return withTransaction({ actorId: actor.userId }, async (tx) => {
-    const [row] = await tx.query(
-      `update mentor_assignments set to_date = current_date
-        where id = $1 and deleted_at is null
-        returning mentor_user_id, implementer_user_id`,
-      [assignmentId],
-    );
+    const row = await closeAssignment(tx, assignmentId);
     if (!row) throw new AppError('E_NOT_FOUND', 'השיוך המבוקש לא נמצא');
     invalidatePrincipal(row.mentor_user_id);
     invalidatePrincipal(row.implementer_user_id);

@@ -39,11 +39,22 @@ const activityBody = z
     domainId: uuid.nullish(),
     subCategoryId: uuid.nullish(),
     notes: optionalText,
+    // פעילות של כמה ימים: נוצרת פעילות לכל יום בטווח (ביצירה בלבד)
+    untilDate: dateStr.nullish(),
+    weekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   })
   .refine((v) => v.audience === 'all' || v.targetIds.length > 0, {
     message: 'יש לבחור לפחות יעד אחד לקהל שנבחר',
     path: ['targetIds'],
-  });
+  })
+  .refine((v) => !v.untilDate || v.untilDate >= v.activityDate, {
+    message: 'תאריך הסיום חייב להיות אחרי תאריך ההתחלה',
+    path: ['untilDate'],
+  })
+  .refine(
+    (v) => !v.untilDate || (Date.parse(v.untilDate) - Date.parse(v.activityDate)) / 86_400_000 <= 30,
+    { message: 'אפשר לקבוע פעילות לטווח של עד 31 ימים', path: ['untilDate'] },
+  );
 
 activitiesRouter.get(
   '/',
@@ -154,8 +165,9 @@ activitiesRouter.post(
 activitiesRouter.delete(
   '/:id',
   requirePermission('activities', 'delete', activityScope),
-  validate({ params: idParam }),
-  async (req, res) => res.json(await svc.remove(req.user, req.params.id)),
+  validate({ params: idParam, query: z.object({ series: z.enum(['0', '1']).optional() }) }),
+  async (req, res) =>
+    res.json(await svc.remove(req.user, req.params.id, { series: req.validQuery.series === '1' })),
 );
 
 activitiesRouter.get(

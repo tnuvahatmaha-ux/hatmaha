@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { toInstants, weekDays, addDays } from '../lib/time.js';
 import { AppError } from '../lib/errors.js';
@@ -19,7 +20,14 @@ const SELECT = `
          a.activity_date, a.start_time, a.end_time, a.starts_at, a.ends_at,
          a.audience::text as audience, a.visibility::text as visibility, a.status,
          a.owner_user_id, a.domain_id, a.sub_category_id, a.prep_done, a.notes,
-         a.row_version,
+         a.row_version, a.series_id,
+         case when a.series_id is not null then
+           (select count(*)::int from activities s2
+             where s2.series_id = a.series_id and s2.deleted_at is null) end as series_count,
+         case when a.series_id is not null then
+           (select count(*)::int from activities s2
+             where s2.series_id = a.series_id and s2.deleted_at is null
+               and s2.activity_date <= a.activity_date) end as series_index,
          at.name_he as type_name, at.code as type_code,
          s.name as site_name, l.name as location_name, d.name as domain_name,
          owner.full_name as owner_name,
@@ -138,67 +146,119 @@ async function resolveAudience(tx, { siteId, audience, targetIds }) {
   }
 }
 
+/** הימים שבטווח, לפי ימי השבוע שנבחרו (0 = ראשון) */
+export function seriesDates(fromDate, untilDate, weekdays) {
+  const dates = [];
+  for (let d = fromDate; d <= untilDate; d = addDays(d, 1)) {
+    const [y, m, day] = d.split('-').map(Number);
+    const weekday = new Date(Date.UTC(y, m - 1, day)).getUTCDay();
+    if (!weekdays?.length || weekdays.includes(weekday)) dates.push(d);
+  }
+  return dates;
+}
+
+/**
+ * יצירה או עדכון של פעילות. עם untilDate (ביצירה בלבד) נוצרת פעילות לכל יום
+ * בטווח, באותה טרנזקציה: אם יום אחד נחסם — שום יום לא נשמר.
+ */
 export async function save(actor, input, { req, traceId } = {}) {
+  if (input.id || !input.untilDate || input.untilDate === input.activityDate) {
+    return withTransaction({ actorId: actor.userId, traceId }, (tx) =>
+      saveOne(tx, actor, input, { req, traceId }));
+  }
+
+  const dates = seriesDates(input.activityDate, input.untilDate, input.weekdays);
+  if (dates.length === 0) throw new AppError('E_VALIDATION', 'אין בטווח שנבחר אף יום מימי השבוע שסומנו');
+  if (dates.length === 1) {
+    return withTransaction({ actorId: actor.userId, traceId }, (tx) =>
+      saveOne(tx, actor, { ...input, activityDate: dates[0] }, { traceId }));
+  }
+
+  const seriesId = randomUUID();
   return withTransaction({ actorId: actor.userId, traceId }, async (tx) => {
-    const site = await tx.required(
-      'select id, timezone from sites where id = $1 and deleted_at is null',
-      [input.siteId],
-      'האתר המבוקש לא נמצא',
-    );
-
-    const { startsAt, endsAt } = toInstants(
-      input.activityDate, input.startTime, input.endTime, site.timezone,
-    );
-
-    const payload = {
-      ...input,
-      startsAt: startsAt.toISOString(),
-      endsAt: endsAt.toISOString(),
-      ownerId: input.ownerUserId ?? actor.userId,
+    const results = [];
+    for (const date of dates) {
+      try {
+        results.push(await saveOne(tx, actor, { ...input, activityDate: date, seriesId }, { traceId }));
+      } catch (err) {
+        if (err instanceof AppError) err.message = `${fmtDate(date)}: ${err.message}`;
+        throw err;
+      }
+    }
+    const pending = results.filter((r) => r.status === 'approval_required');
+    return {
+      status: pending.length ? 'approval_required' : results.some((r) => r.status === 'warning') ? 'warning' : 'ok',
+      seriesId,
+      count: results.length,
+      created: results.filter((r) => r.data).length,
+      exceptions: pending.flatMap((r) => r.exceptions),
+      warnings: results.flatMap((r) => r.warnings ?? []),
+      data: results[0].data,
     };
-
-    if (input.id) {
-      const current = await tx.lock('activities', input.id);
-      if (!current || current.deleted_at) throw new AppError('E_NOT_FOUND', 'הפעילות המבוקשת לא נמצאה');
-      if (req) assertIfMatch(req, current);
-    }
-
-    // החוקים נבדקים מול כל משתתף — חפיפה של אדם אחד היא בעיה של הפעילות
-    const audience = await resolveAudience(tx, {
-      siteId: input.siteId,
-      audience: input.audience,
-      targetIds: input.targetIds ?? [],
-    });
-
-    if (audience.length === 0) {
-      throw new AppError('E_VALIDATION', 'קהל היעד שנבחר אינו כולל אף משתתף');
-    }
-
-    return evaluateAndExecute(
-      tx,
-      {
-        trigger: input.id ? 'change' : 'assign',
-        subjectType: 'activity',
-        subjectId: input.id ?? null,
-        targetUserId: audience[0].id,
-        siteId: input.siteId,
-        domainId: input.domainId ?? null,
-        startsAt,
-        endsAt,
-        localDate: input.activityDate,
-        excludeId: input.id ?? null,
-        timeZone: site.timezone,
-      },
-      {
-        meta: { actorId: actor.userId, traceId },
-        summary: `פעילות "${input.title ?? ''}" ב-${input.activityDate}`,
-        action: {
-          type: 'activities.save',
-          payload: { ...payload, participantIds: audience.map((a) => a.id) },
-        },
-      },
-    );
   });
+}
+
+const fmtDate = (d) => d.split('-').reverse().slice(0, 2).join('.');
+
+async function saveOne(tx, actor, input, { req, traceId } = {}) {
+  const site = await tx.required(
+    'select id, timezone from sites where id = $1 and deleted_at is null',
+    [input.siteId],
+    'האתר המבוקש לא נמצא',
+  );
+
+  const { startsAt, endsAt } = toInstants(
+    input.activityDate, input.startTime, input.endTime, site.timezone,
+  );
+
+  const payload = {
+    ...input,
+    startsAt: startsAt.toISOString(),
+    endsAt: endsAt.toISOString(),
+    ownerId: input.ownerUserId ?? actor.userId,
+  };
+
+  if (input.id) {
+    const current = await tx.lock('activities', input.id);
+    if (!current || current.deleted_at) throw new AppError('E_NOT_FOUND', 'הפעילות המבוקשת לא נמצאה');
+    if (req) assertIfMatch(req, current);
+  }
+
+  // החוקים נבדקים מול כל משתתף — חפיפה של אדם אחד היא בעיה של הפעילות
+  const audience = await resolveAudience(tx, {
+    siteId: input.siteId,
+    audience: input.audience,
+    targetIds: input.targetIds ?? [],
+  });
+
+  if (audience.length === 0) {
+    throw new AppError('E_VALIDATION', 'קהל היעד שנבחר אינו כולל אף משתתף');
+  }
+
+  return evaluateAndExecute(
+    tx,
+    {
+      trigger: input.id ? 'change' : 'assign',
+      subjectType: 'activity',
+      subjectId: input.id ?? null,
+      targetUserId: audience[0].id,
+      siteId: input.siteId,
+      domainId: input.domainId ?? null,
+      startsAt,
+      endsAt,
+      localDate: input.activityDate,
+      excludeId: input.id ?? null,
+      timeZone: site.timezone,
+    },
+    {
+      meta: { actorId: actor.userId, traceId },
+      summary: `פעילות "${input.title ?? ''}" ב-${input.activityDate}`,
+      action: {
+        type: 'activities.save',
+        payload: { ...payload, participantIds: audience.map((a) => a.id) },
+      },
+    },
+  );
 }
 
 registerAction('activities.save', async (tx, payload, meta) => {
@@ -228,11 +288,11 @@ registerAction('activities.save', async (tx, payload, meta) => {
            (site_id, location_id, activity_type_id, title, description,
             activity_date, start_time, end_time, starts_at, ends_at,
             audience, visibility, owner_user_id, domain_id, sub_category_id,
-            notes, rule_evaluation_id)
+            notes, rule_evaluation_id, series_id)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::audience_type,$12::visibility_type,
-                 $13,$14,$15,$16,$17)
+                 $13,$14,$15,$16,$17,$18)
          returning *`,
-        values,
+        [...values, payload.seriesId ?? null],
       );
 
   // קהל היעד והמשתתפים נשמרים מחדש בכל שמירה
@@ -326,30 +386,46 @@ export async function setAttendance(actor, id, entries) {
   });
 }
 
-export async function remove(actor, id) {
+/**
+ * מחיקה לוגית: פעילות שהתקיימה היא חלק מההיסטוריה (§12).
+ * עם series — כל הימים בסדרה שעוד לא הושלמו נמחקים יחד.
+ */
+export async function remove(actor, id, { series = false } = {}) {
   return withTransaction({ actorId: actor.userId }, async (tx) => {
-    // מחיקה לוגית: פעילות שהתקיימה היא חלק מההיסטוריה (§12)
-    const [row] = await tx.query(
-      `update activities set deleted_at = now(), deleted_by = $2, status = 'cancelled'
-        where id = $1 and deleted_at is null returning id, title`,
-      [id, actor.userId],
+    const [target] = await tx.query(
+      'select id, series_id from activities where id = $1 and deleted_at is null',
+      [id],
     );
-    if (!row) throw new AppError('E_NOT_FOUND', 'הפעילות המבוקשת לא נמצאה');
+    if (!target) throw new AppError('E_NOT_FOUND', 'הפעילות המבוקשת לא נמצאה');
+
+    const rows = series && target.series_id
+      ? await tx.query(
+          `update activities set deleted_at = now(), deleted_by = $2, status = 'cancelled'
+            where series_id = $1 and deleted_at is null
+              and (id = $3 or status <> 'completed')
+            returning id, title, activity_date`,
+          [target.series_id, actor.userId, id],
+        )
+      : await tx.query(
+          `update activities set deleted_at = now(), deleted_by = $2, status = 'cancelled'
+            where id = $1 returning id, title, activity_date`,
+          [id, actor.userId],
+        );
 
     const participants = await tx.query(
-      'select user_id from activity_participants where activity_id = $1',
-      [id],
+      'select distinct user_id from activity_participants where activity_id = any($1::uuid[])',
+      [rows.map((r) => r.id)],
     );
     await notify(tx, {
       typeCode: 'activity_changed',
       recipientIds: participants.map((p) => p.user_id),
-      title: 'פעילות בוטלה',
-      body: row.title ?? '',
+      title: rows.length > 1 ? `פעילות בוטלה (${rows.length} ימים)` : 'פעילות בוטלה',
+      body: rows[0].title ?? '',
       entityType: 'activities',
       entityId: id,
     });
 
-    return { removed: id };
+    return { removed: id, count: rows.length };
   });
 }
 

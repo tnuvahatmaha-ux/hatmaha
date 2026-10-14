@@ -22,6 +22,19 @@ const AUDIENCE_LABELS = {
 const ROLE_NAMES = { manager: 'מנהלים', mentor: 'מדריכים', lead: 'מובילים', implementer: 'מטמיעים' };
 const PHASE_NAMES = { training: 'הכשרה', golive: 'עלייה לאוויר', support: 'ליווי' };
 
+const WEEKDAY_LABELS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+
+/** הימים בטווח לפי ימי השבוע שנבחרו — כמו seriesDates בשרת */
+function seriesDates(from, until, weekdays) {
+  const dates = [];
+  if (!from || !until || until < from) return dates;
+  for (let d = from; d <= until && dates.length < 40; d = addDays(d, 1)) {
+    const [y, m, day] = d.split('-').map(Number);
+    if (weekdays.includes(new Date(Date.UTC(y, m - 1, day)).getUTCDay())) dates.push(d);
+  }
+  return dates;
+}
+
 const VISIBILITY_LABELS = {
   participants: 'גלוי למשתתפים',
   managers_only: 'גלוי למנהלים בלבד',
@@ -132,6 +145,7 @@ export default function Activities() {
                   key={activity.id}
                   activity={activity}
                   onEdit={() => setEditing(activity)}
+                  onDuplicate={() => setEditing({ copyFrom: activity })}
                   onChanged={activities.reload}
                 />
               ))}
@@ -144,14 +158,17 @@ export default function Activities() {
 
       {editing && (
         <ActivityForm
+          key={editing.id ?? editing.copyFrom?.id ?? 'new'}
           activity={editing.id ? editing : null}
-          initial={editing.id ? null : editing}
+          copyFrom={editing.copyFrom ?? null}
+          initial={editing.id || editing.copyFrom ? null : editing}
           onClose={() => setEditing(null)}
-          onSaved={() => {
+          onDuplicate={(activity) => setEditing({ copyFrom: activity })}
+          onSaved={(message) => {
             setEditing(null);
             if (view === 'list') activities.reload();
             else window.dispatchEvent(new Event('activities:changed'));
-            toast.success('הפעילות נשמרה');
+            toast.success(message ?? 'הפעילות נשמרה');
           }}
         />
       )}
@@ -159,7 +176,7 @@ export default function Activities() {
   );
 }
 
-function ActivityRow({ activity, onEdit, onChanged }) {
+function ActivityRow({ activity, onEdit, onDuplicate, onChanged }) {
   const toast = useToast();
   const { can } = usePermissions();
 
@@ -203,6 +220,7 @@ function ActivityRow({ activity, onEdit, onChanged }) {
       </div>
 
       <div className="row" style={{ gap: 4 }}>
+        {activity.series_id && <Tag tone="accent">יום {activity.series_index} מתוך {activity.series_count}</Tag>}
         <Tag>{activity.participant_count} משתתפים</Tag>
         <Tag tone={activity.visibility === 'participants' ? '' : 'warn'}>
           {VISIBILITY_LABELS[activity.visibility]}
@@ -222,35 +240,49 @@ function ActivityRow({ activity, onEdit, onChanged }) {
             </button>
           )}
           <button type="button" className="btn btn-sm" onClick={onEdit}>עריכה</button>
+          {can('activities', 'create') && (
+            <button type="button" className="btn btn-sm" onClick={onDuplicate}>שכפול</button>
+          )}
         </div>
       )}
     </li>
   );
 }
 
-function ActivityForm({ activity, initial, onClose, onSaved }) {
+function ActivityForm({ activity, copyFrom, initial, onClose, onSaved, onDuplicate }) {
   const toast = useToast();
+  const { can } = usePermissions();
+  // בשכפול: כל הפרטים מהפעילות המקורית, בתאריך חדש
+  const source = activity ?? copyFrom;
   const sites = useApi('/api/sites');
   const types = useApi('/api/settings/lookups/activityTypes');
   const domains = useApi('/api/settings/domains');
   // בעריכה: קהל היעד הקיים, כדי שהיעדים שנבחרו לא יתאפסו
-  const detail = useApi(activity ? `/api/activities/${activity.id}` : null);
+  const detail = useApi(source ? `/api/activities/${source.id}` : null);
 
   const [form, setForm] = useState({
-    siteId: activity?.site_id ?? initial?.siteId ?? '',
-    locationId: activity?.location_id ?? '',
-    activityTypeId: activity?.activity_type_id ?? '',
-    title: activity?.title ?? '',
-    activityDate: activity?.activity_date ?? initial?.activityDate ?? today(),
-    startTime: fmtClock(activity?.start_time) || '09:00',
-    endTime: fmtClock(activity?.end_time) || '11:00',
-    audience: activity?.audience ?? 'users',
+    siteId: source?.site_id ?? initial?.siteId ?? '',
+    locationId: source?.location_id ?? '',
+    activityTypeId: source?.activity_type_id ?? '',
+    title: source?.title ?? '',
+    activityDate: activity?.activity_date
+      ?? (copyFrom ? addDays(copyFrom.activity_date, 1) : null)
+      ?? initial?.activityDate ?? today(),
+    startTime: fmtClock(source?.start_time) || '09:00',
+    endTime: fmtClock(source?.end_time) || '11:00',
+    audience: source?.audience ?? 'users',
     targetIds: initial?.targetIds ?? [],
-    visibility: activity?.visibility ?? 'participants',
-    ownerUserId: activity?.owner_user_id ?? '',
-    domainId: activity?.domain_id ?? '',
-    notes: activity?.notes ?? '',
+    visibility: source?.visibility ?? 'participants',
+    ownerUserId: activity?.owner_user_id ?? copyFrom?.owner_user_id ?? '',
+    domainId: source?.domain_id ?? '',
+    notes: source?.notes ?? '',
   });
+  // פעילות של כמה ימים — ביצירה בלבד; ברירת מחדל: ראשון עד חמישי
+  const [multiDay, setMultiDay] = useState(false);
+  const [untilDate, setUntilDate] = useState('');
+  const [weekdays, setWeekdays] = useState([0, 1, 2, 3, 4]);
+  const dates = multiDay ? seriesDates(form.activityDate, untilDate, weekdays) : [];
+  const tooLong = multiDay && untilDate && untilDate > addDays(form.activityDate, 30);
 
   useEffect(() => {
     if (!detail.data) return;
@@ -298,10 +330,32 @@ function ActivityForm({ activity, initial, onClose, onSaved }) {
       };
       if (activity) {
         await patch(`/api/activities/${activity.id}`, body, { ifMatch: activity.row_version });
-      } else {
-        await post('/api/activities', body, { idempotencyKey: newIdempotencyKey() });
+        onSaved();
+        return;
       }
-      onSaved();
+      if (multiDay) {
+        if (!untilDate) throw new Error('יש לבחור תאריך סיום');
+        if (dates.length === 0) throw new Error('אין בטווח שנבחר אף יום מימי השבוע שסומנו');
+        Object.assign(body, { untilDate, weekdays });
+      }
+      const out = await post('/api/activities', body, { idempotencyKey: newIdempotencyKey() });
+      onSaved(
+        out?.count > 1
+          ? out.status === 'approval_required'
+            ? `נוצרו ${out.created} מתוך ${out.count} פעילויות; השאר ממתינות לאישור`
+            : `נוצרו ${out.count} פעילויות`
+          : undefined,
+      );
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const remove = useAction(
+    async (series) => {
+      const what = series ? `את כל ${activity.series_count} הימים בסדרה` : 'את הפעילות';
+      if (!window.confirm(`למחוק ${what}? המשתתפים יקבלו התראה על הביטול.`)) return;
+      const out = await del(`/api/activities/${activity.id}${series ? '?series=1' : ''}`);
+      onSaved(out?.count > 1 ? `נמחקו ${out.count} פעילויות` : 'הפעילות נמחקה');
     },
     { onError: (err) => toast.error(err) },
   );
@@ -335,15 +389,37 @@ function ActivityForm({ activity, initial, onClose, onSaved }) {
 
   return (
     <Modal
-      title={activity ? 'עריכת פעילות' : 'פעילות חדשה'}
+      title={activity ? 'עריכת פעילות' : copyFrom ? 'שכפול פעילות' : 'פעילות חדשה'}
       onClose={onClose}
       width={640}
       footer={
         <>
-          <button type="button" className="btn btn-primary" onClick={() => save.run()} disabled={save.busy}>
-            {save.busy ? 'שומר…' : 'שמירה'}
+          <button type="button" className="btn btn-primary" onClick={() => save.run()}
+            disabled={save.busy || tooLong}>
+            {save.busy ? 'שומר…' : dates.length > 1 ? `יצירת ${dates.length} פעילויות` : 'שמירה'}
           </button>
           <button type="button" className="btn" onClick={onClose}>ביטול</button>
+          {activity && (
+            <span className="row" style={{ gap: 4, marginInlineStart: 'auto' }}>
+              {can('activities', 'create') && (
+                <button type="button" className="btn btn-sm" onClick={() => onDuplicate(activity)}>שכפול</button>
+              )}
+              {can('activities', 'delete') && (
+                <>
+                  <button type="button" className="btn btn-sm btn-danger" onClick={() => remove.run(false)}
+                    disabled={remove.busy}>
+                    {activity.series_id ? 'מחיקת היום הזה' : 'מחיקה'}
+                  </button>
+                  {activity.series_id && activity.series_count > 1 && (
+                    <button type="button" className="btn btn-sm btn-danger" onClick={() => remove.run(true)}
+                      disabled={remove.busy}>
+                      מחיקת כל הסדרה
+                    </button>
+                  )}
+                </>
+              )}
+            </span>
+          )}
         </>
       }
     >
@@ -374,8 +450,14 @@ function ActivityForm({ activity, initial, onClose, onSaved }) {
           </Field>
         </div>
 
+        {activity?.series_id && (
+          <Notice icon="ℹ">
+            יום {activity.series_index} מתוך {activity.series_count} בסדרה. שינוי כאן חל על היום הזה בלבד.
+          </Notice>
+        )}
+
         <div className="grid grid-3">
-          <Field label="תאריך" required>
+          <Field label={multiDay ? 'מתאריך' : 'תאריך'} required>
             {(props) => (
               <input {...props} type="date" value={form.activityDate}
                 onChange={(e) => setForm({ ...form, activityDate: e.target.value })} />
@@ -394,6 +476,42 @@ function ActivityForm({ activity, initial, onClose, onSaved }) {
             )}
           </Field>
         </div>
+
+        {!activity && (
+          <div className="field">
+            <label className="row" style={{ gap: 6, fontWeight: 'normal' }}>
+              <input type="checkbox" checked={multiDay} style={{ width: 'auto' }}
+                onChange={(e) => {
+                  setMultiDay(e.target.checked);
+                  if (e.target.checked && !untilDate) setUntilDate(addDays(form.activityDate, 4));
+                }} />
+              פעילות של כמה ימים
+            </label>
+            {multiDay && (
+              <div className="grid grid-2 mt-3" style={{ alignItems: 'end' }}>
+                <Field label="עד תאריך" required error={save.fieldErrors.untilDate ?? (tooLong ? 'אפשר עד 31 ימים' : undefined)}>
+                  {(props) => (
+                    <input {...props} type="date" value={untilDate} min={form.activityDate}
+                      max={addDays(form.activityDate, 30)}
+                      onChange={(e) => setUntilDate(e.target.value)} />
+                  )}
+                </Field>
+                <Field label="בימים">
+                  <ChipPicker
+                    options={WEEKDAY_LABELS.map((label, value) => ({ value, label }))}
+                    selected={weekdays}
+                    onToggle={(d) => setWeekdays((w) => (w.includes(d) ? w.filter((x) => x !== d) : [...w, d].sort()))}
+                  />
+                </Field>
+                <p className="small muted" style={{ gridColumn: '1 / -1', margin: 0 }}>
+                  {dates.length > 0
+                    ? `ייווצרו ${dates.length} פעילויות נפרדות, אחת לכל יום (${dates.map((d) => fmtDate(d)).slice(0, 7).join(', ')}${dates.length > 7 ? '…' : ''}). אפשר לערוך או למחוק כל יום בנפרד.`
+                    : 'אין בטווח אף יום מהימים שסומנו'}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         <Field label="מי מעביר" hint="המדריך יראה את הפעילות בלו״ז שלו. ריק = את/ה">
           {(props) => (

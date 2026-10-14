@@ -130,7 +130,7 @@ export default function Implementers() {
                   <th>תפקיד</th>
                   <th>אתר</th>
                   <th>תחום</th>
-                  <th>מדריך ראשי</th>
+                  <th>מדריכים</th>
                   <th>סטטוס</th>
                   <th />
                 </tr>
@@ -153,7 +153,14 @@ export default function Implementers() {
                       <td data-label="תפקיד">{ROLE_NAMES[person.base_role]}</td>
                       <td data-label="אתר">{person.sites.map((s) => s.name).join(', ') || (trainee ? <Missing /> : '—')}</td>
                       <td data-label="תחום">{person.domains.map((d) => d.name).join(', ') || (trainee ? <Missing /> : '—')}</td>
-                      <td data-label="מדריך ראשי">{primaryMentor?.name ?? (trainee ? <Missing /> : '—')}</td>
+                      <td data-label="מדריכים">
+                        {primaryMentor?.name ?? (trainee ? <Missing /> : person.mentors.length ? '' : '—')}
+                        {person.mentors.length > (primaryMentor ? 1 : 0) && (
+                          <span className="muted small" title={person.mentors.filter((m) => !m.isPrimary).map((m) => m.name).join(', ')}>
+                            {primaryMentor ? ' ' : ''}+{person.mentors.length - (primaryMentor ? 1 : 0)} תומכים
+                          </span>
+                        )}
+                      </td>
                       <td data-label="סטטוס">
                         <Tag tone={statusTone(person.status)}>{STATUS_NAMES[person.status]}</Tag>
                       </td>
@@ -233,8 +240,9 @@ function OnboardingWizard({ onClose, onDone }) {
       (mentor.responsibilities ?? []).some(
         (r) =>
           (!r.siteId || r.siteId === form.siteId) &&
-          (!r.domainId || form.domainIds.includes(r.domainId)) &&
-          (!r.subCategoryId || form.subCategoryIds.includes(r.subCategoryId)),
+          ((!r.domainId && !r.subCategoryId) ||
+            form.domainIds.includes(r.domainId) ||
+            form.subCategoryIds.includes(r.subCategoryId)),
       ),
     );
   }, [mentors.data, form.siteId, form.domainIds, form.subCategoryIds]);
@@ -627,20 +635,40 @@ function PersonDialog({ person: initial, onClose, onChanged }) {
   );
 
   const assignMentor = useAction(
-    async () => {
+    async (isPrimary) => {
       await post(
         '/api/settings/mentors/assignments',
-        { mentorUserId: mentorId, implementerUserId: person.id, isPrimary: true },
+        { mentorUserId: mentorId, implementerUserId: person.id, isPrimary },
         { idempotencyKey: newIdempotencyKey() },
       );
-      toast.success('המדריך שויך');
+      toast.success(isPrimary ? 'המדריך שויך כמדריך ראשי' : 'המדריך נוסף כמדריך תומך');
       setMentorId('');
       setValidation(null);
       detail.reload();
+      mentors.reload();
       onChanged();
     },
     { onError: (err) => toast.error(err) },
   );
+
+  const endMentor = useAction(
+    async (m) => {
+      if (!window.confirm(`לסיים את השיוך של ${m.name}?`)) return;
+      await del(`/api/settings/mentors/assignments/${m.assignmentId}`);
+      toast.success('השיוך הסתיים');
+      detail.reload();
+      mentors.reload();
+      onChanged();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const assignedIds = (current.mentors ?? []).map((m) => m.id);
+  const primaryAssigned = (current.mentors ?? []).find((m) => m.isPrimary);
+  const pickedIsPrimary = primaryAssigned?.id === mentorId;
+  // המדריך הראשי הנוכחי לא מוצג; תומך מוצג כדי שאפשר יהיה להפוך אותו לראשי
+  const mentorOptions = (mentors.data?.mentors ?? [])
+    .filter((m) => m.id !== person.id && m.id !== primaryAssigned?.id);
 
   const toggle = (list, setList, value) =>
     setList(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
@@ -728,16 +756,28 @@ function PersonDialog({ person: initial, onClose, onChanged }) {
         {current.mentors?.length > 0 ? (
           <div className="row" style={{ marginBlockEnd: 'var(--space-3)' }}>
             {current.mentors.map((m) => (
-              <Tag key={m.id} tone={m.isPrimary ? 'accent' : ''}>
-                {m.name}{m.isPrimary && ' (ראשי)'}
-              </Tag>
+              <span key={m.id} className="row" style={{ gap: 2, flexWrap: 'nowrap' }}>
+                <Tag tone={m.isPrimary ? 'accent' : ''}>
+                  {m.name} ({m.isPrimary ? 'ראשי' : 'תומך'})
+                </Tag>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-label={`סיום השיוך של ${m.name}`}
+                  title="סיום השיוך"
+                  disabled={endMentor.busy}
+                  onClick={() => endMentor.run(m)}
+                >
+                  ×
+                </button>
+              </span>
             ))}
           </div>
         ) : (
           <Notice tone="warn" icon="⚠">עדיין לא שויך מדריך.</Notice>
         )}
 
-        <Field label="שיוך מדריך ראשי">
+        <Field label="שיוך מדריך" hint="למטמיע יש מדריך ראשי אחד, ואפשר להוסיף כמה מדריכים תומכים">
           {(props) => (
             <select
               {...props}
@@ -747,9 +787,10 @@ function PersonDialog({ person: initial, onClose, onChanged }) {
               <option value="">
                 {(mentors.data?.mentors ?? []).length ? 'בחירת מדריך' : 'אין עדיין מדריכים במערכת'}
               </option>
-              {(mentors.data?.mentors ?? []).map((m) => (
+              {mentorOptions.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.full_name} ({m.implementer_count} מטמיעים)
+                  {assignedIds.includes(m.id) ? ' · תומך כרגע' : ''}
                 </option>
               ))}
             </select>
@@ -782,10 +823,18 @@ function PersonDialog({ person: initial, onClose, onChanged }) {
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            onClick={() => assignMentor.run()}
-            disabled={!mentorId || assignMentor.busy || validation?.valid === false}
+            onClick={() => assignMentor.run(true)}
+            disabled={!mentorId || pickedIsPrimary || assignMentor.busy || validation?.valid === false}
           >
-            {assignMentor.busy ? 'משייך…' : 'שיוך כמדריך ראשי'}
+            {primaryAssigned ? 'החלפה למדריך ראשי' : 'שיוך כמדריך ראשי'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => assignMentor.run(false)}
+            disabled={!mentorId || assignedIds.includes(mentorId) || assignMentor.busy || validation?.valid === false}
+          >
+            הוספה כמדריך תומך
           </button>
         </div>
         {!mentors.loading && (mentors.data?.mentors ?? []).length === 0 && (
