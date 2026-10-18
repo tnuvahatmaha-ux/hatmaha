@@ -622,6 +622,14 @@ button.roster-hours:hover { background: var(--fill-strong); }
 .board-chip { background: var(--primary-ink); box-shadow: none; flex-wrap: wrap; }
 .board-chip .tag { font-size: 10px; padding: 0 5px; }
 .board-shift { background: var(--surface-2); box-shadow: none; color: var(--muted); gap: 4px; }
+.board-constraint {
+  display: block; border-radius: 6px; padding: 2px 6px;
+  font-size: 11px; font-weight: 600; line-height: 1.35;
+  background: var(--danger-bg); color: var(--danger);
+}
+.board-constraint.pending { background: var(--warn-bg); color: var(--warn); }
+.roster-dayhead .board-constraint { font-weight: 500; text-align: center; }
+.roster-day-constraints { display: flex; flex-direction: column; gap: 2px; margin-block-start: 4px; width: 100%; }
 .board-activity {
   display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%;
   border: 0; border-radius: 8px; background: var(--primary-ink); color: var(--ink);

@@ -158,6 +158,7 @@ export async function board(versionId) {
     ),
     query(
       `select cr.user_id, cr.starts_at, cr.ends_at, cr.status::text as status,
+              cr.constraint_date::text as constraint_date, cr.start_time, cr.end_time,
               ct.name_he as type_name
          from constraint_requests cr
          join constraint_types ct on ct.id = cr.constraint_type_id

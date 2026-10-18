@@ -298,6 +298,7 @@ function RosterMatrix({ board, editable, onChanged }) {
             {board.phases?.[date] && (
               <span className={`phase phase-${board.phases[date]}`}>{PHASE_NAMES[board.phases[date]]}</span>
             )}
+            <DayConstraints board={board} date={date} />
           </div>
         ))}
 
@@ -735,6 +736,34 @@ function AssignmentNote({ assignment, shift, date, cellHours, editableHours, onC
  * טווח שעות מקומי ליום מסוים; סיום שאינו אחרי ההתחלה נמשך ליום שלמחרת.
  * חישוב גס בלקוח לצורך הסימון בלבד — השרת, עם אזור הזמן של האתר, הוא הקובע.
  */
+/**
+ * מי מהמטמיעים באתר עם אילוץ ביום — כדי שיראו אותו לפני שפותחים את רשימת
+ * ההוספה. רק סוג האילוץ ושעותיו, בלי הסיבה.
+ */
+function DayConstraints({ board, date }) {
+  const names = new Map(board.people.map((p) => [p.id, p.full_name]));
+  const list = board.constraints
+    .filter((c) => c.constraint_date === date && names.has(c.user_id))
+    .sort((a, b) => (a.status === 'approved' ? 0 : 1) - (b.status === 'approved' ? 0 : 1));
+  if (list.length === 0) return null;
+
+  const hours = (c) => {
+    const from = fmtClock(c.start_time);
+    const to = fmtClock(c.end_time);
+    return from === '00:00' && to >= '23:59' ? '' : ` ${from}–${to}`;
+  };
+  return (
+    <div className="roster-day-constraints">
+      {list.map((c, i) => (
+        <span key={i} className={`board-constraint${c.status === 'approved' ? '' : ' pending'}`}
+          title={`${c.type_name}${c.status === 'approved' ? ' — אושר' : ' — ממתין לאישור'}`}>
+          {c.status === 'approved' ? '⛔' : '⏳'} {names.get(c.user_id)} · {c.type_name}{hours(c)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function localRange(date, startTime, endTime) {
   const start = new Date(`${date}T${fmtClock(startTime)}`);
   let end = new Date(`${date}T${fmtClock(endTime)}`);

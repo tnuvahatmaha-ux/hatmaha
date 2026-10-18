@@ -235,8 +235,30 @@ function SiteDetail({ siteId }) {
             )}
           </Panel>
 
-          {data.locations.some((l) => l.rotation_cycle) && (
+          {data.locations.some((l) => l.rotation_cycle) ? (
             <RotationsPanel siteId={siteId} locations={data.locations.filter((l) => l.rotation_cycle)} />
+          ) : (
+            <Panel
+              title="סבב שבועי"
+              subtitle="מיקום שעובד במתכונת שבוע־שבוע: כל שבוע המטמיע עובד בסוג משמרת אחד (למשל בוקר), ובשבוע שאחריו בסוג הבא בסבב"
+            >
+              <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>
+                אף מיקום באתר לא מוגדר עדיין כסבב שבועי. אחרי שמגדירים מיקום כסבב, מוסיפים כאן את המטמיעים
+                שעובדים בו — והם יגישו זמינות רק לסוג המשמרת שלהם בכל שבוע.
+              </p>
+              {data.locations.length === 0 ? (
+                <p className="small muted">יש להוסיף מיקום תחילה.</p>
+              ) : (
+                <div className="row" style={{ gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                  {data.locations.map((l) => (
+                    <button key={l.id} type="button" className="btn btn-sm"
+                      onClick={() => setLocationForm({ ...l, rotation_cycle: ['morning', 'afternoon', 'night'] })}>
+                      🔄 הגדרת {l.name} כסבב שבועי
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Panel>
           )}
 
           {copyDomain && (

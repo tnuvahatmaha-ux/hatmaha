@@ -596,6 +596,13 @@ function ActivityForm({ activity, copyFrom, initial, onClose, onSaved, onDuplica
  * באילו הדרכות ותצפיות הוא נוכח. שורה עליונה — כל הפעילויות של היום;
  * מתחתיה שורה לכל מטמיע, ובה הפעילויות שלו והמשמרות שלו מהסידור.
  */
+/** אילוץ חוסם יום שלם כשהוא מכסה 00:00–23:59 */
+const fullDay = (c) => fmtClock(c.start_time) === '00:00' && fmtClock(c.end_time) >= '23:59';
+const constraintLabel = (c) =>
+  `${c.status === 'approved' ? '⛔' : '⏳'} ${c.type_name}${fullDay(c) ? '' : ` ${fmtClock(c.start_time)}–${fmtClock(c.end_time)}`}${c.status === 'approved' ? '' : ' (ממתין)'}`;
+/** האם פעילות חופפת לאילוץ באותו יום */
+const clashes = (c, a) => fullDay(c) || (fmtClock(a.start_time) < fmtClock(c.end_time) && fmtClock(c.start_time) < fmtClock(a.end_time));
+
 function TrainingBoard({ sites, onEdit }) {
   const toast = useToast();
   const { can } = usePermissions();
@@ -655,6 +662,10 @@ function TrainingBoard({ sites, onEdit }) {
     }
     return items;
   };
+
+  /** האילוצים של אדם ביום — מה שאושר לו, או ממתין לאישור */
+  const constraintsFor = (personId, date) =>
+    (data?.constraints ?? []).filter((c) => c.user_id === personId && c.date === date);
 
   return (
     <Panel
@@ -719,6 +730,7 @@ function TrainingBoard({ sites, onEdit }) {
 
               {data.people.map((person) => (
                 <PersonRow key={person.id} person={person} days={data.days} itemsFor={itemsFor}
+                  constraintsFor={constraintsFor}
                   editable={editable} busy={toggle.busy}
                   onRemove={(activity) => toggle.run(activity, person.id, false)}
                   onOpen={(date) => setCell({ person, date })}
@@ -730,6 +742,7 @@ function TrainingBoard({ sites, onEdit }) {
               <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--primary-ink)' }} />פעילות</span>
               <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--surface-2)' }} />משמרת מהסידור</span>
               <span className="legend-item"><span className="legend-swatch" style={{ background: 'var(--danger-bg)' }} />חפיפה</span>
+              <span className="legend-item">⛔ אילוץ שאושר · ⏳ ממתין לאישור</span>
             </div>
           </div>
         )}
@@ -740,6 +753,7 @@ function TrainingBoard({ sites, onEdit }) {
           person={cell.person}
           date={cell.date}
           activities={data.activities.filter((a) => a.activity_date === cell.date)}
+          constraints={constraintsFor(cell.person.id, cell.date)}
           busy={toggle.busy}
           canCreate={can('activities', 'create')}
           onToggle={(activity, present) => toggle.run(activity, cell.person.id, present)}
@@ -751,7 +765,7 @@ function TrainingBoard({ sites, onEdit }) {
   );
 }
 
-function PersonRow({ person, days, itemsFor, editable, busy, onRemove, onOpen, onEdit }) {
+function PersonRow({ person, days, itemsFor, constraintsFor, editable, busy, onRemove, onOpen, onEdit }) {
   return (
     <>
       <div className="roster-loc" title={person.domains ?? undefined}>
@@ -762,10 +776,19 @@ function PersonRow({ person, days, itemsFor, editable, busy, onRemove, onOpen, o
       </div>
       {days.map((date) => {
         const items = itemsFor(person.id, date);
+        const blocks = constraintsFor(person.id, date);
+        // פעילות שחופפת לאילוץ שאושר — מסומנת כבעיה
+        const clash = (activity) => blocks.some((c) => c.status === 'approved' && clashes(c, activity));
+        const blocked = blocks.some((c) => c.status === 'approved');
         return (
-          <div key={date} className={`roster-slot board-cell ${items.length ? 'covered' : 'vacant'}`}>
+          <div key={date} className={`roster-slot board-cell ${blocked ? 'issue' : items.length ? 'covered' : 'vacant'}`}>
+            {blocks.map((c, i) => (
+              <span key={`c-${i}`} className={`board-constraint${c.status === 'approved' ? '' : ' pending'}`}>
+                {constraintLabel(c)}
+              </span>
+            ))}
             {items.map((item) => item.kind === 'activity' ? (
-              <span key={`a-${item.activity.id}`} className={`roster-chip board-chip${item.overlap ? ' issue' : ''}`}>
+              <span key={`a-${item.activity.id}`} className={`roster-chip board-chip${item.overlap || clash(item.activity) ? ' issue' : ''}`}>
                 <button type="button" className="chip-name" onClick={() => onEdit(item.activity)}
                   title={[item.activity.type_name, item.activity.owner_name && `מעביר/ה: ${item.activity.owner_name}`].filter(Boolean).join(' · ')}>
                   <span className="tnum tiny">{fmtClock(item.start)}</span> {item.activity.title || item.activity.type_name}
@@ -796,7 +819,7 @@ function PersonRow({ person, days, itemsFor, editable, busy, onRemove, onOpen, o
   );
 }
 
-function AssignDialog({ person, date, activities, busy, canCreate, onToggle, onCreate, onClose }) {
+function AssignDialog({ person, date, activities, constraints = [], busy, canCreate, onToggle, onCreate, onClose }) {
   return (
     <Modal
       title={`${person.full_name} · ${dayName(date)} ${fmtDate(date)}`}
@@ -809,6 +832,11 @@ function AssignDialog({ person, date, activities, busy, canCreate, onToggle, onC
         </>
       }
     >
+      {constraints.length > 0 && (
+        <Notice icon="⛔" title="יש למטמיע אילוץ ביום הזה">
+          {constraints.map(constraintLabel).join(' · ')}
+        </Notice>
+      )}
       {activities.length === 0 ? (
         <Empty icon="📚" title="אין פעילויות ביום הזה" text="אפשר ליצור פעילות חדשה — המטמיע ישויך אליה אוטומטית." />
       ) : (
@@ -816,6 +844,7 @@ function AssignDialog({ person, date, activities, busy, canCreate, onToggle, onC
           {activities.map((a) => {
             const present = a.participant_ids.includes(person.id);
             const instructor = a.owner_user_id === person.id;
+            const conflict = constraints.find((c) => clashes(c, a));
             return (
               <label key={a.id} className="check" style={{ alignItems: 'flex-start' }}>
                 <input type="checkbox" checked={present} disabled={busy || instructor}
@@ -828,6 +857,11 @@ function AssignDialog({ person, date, activities, busy, canCreate, onToggle, onC
                       .filter(Boolean).join(' · ')}
                     {instructor && ' · מעביר/ה את הפעילות'}
                   </div>
+                  {conflict && (
+                    <div className="tiny" style={{ color: conflict.status === 'approved' ? 'var(--danger)' : 'var(--warn)' }}>
+                      חופף ל{conflict.type_name}{conflict.status === 'approved' ? ' שאושר' : ' שממתין לאישור'}
+                    </div>
+                  )}
                 </span>
               </label>
             );

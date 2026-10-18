@@ -5,6 +5,8 @@ import { requirePermission } from '../middleware/requirePermission.js';
 import { validate } from '../middleware/validate.js';
 import { query } from '../lib/db.js';
 import { uuid, dateStr } from '../schemas/common.schema.js';
+import { sendCsv } from '../lib/csv.js';
+import { recordExport } from '../audit/service.js';
 
 export const scheduleRouter = Router();
 scheduleRouter.use(requireAuth);
@@ -100,59 +102,125 @@ scheduleRouter.get(
  * אילוץ, אין הערות פרטיות ואין טיוטות סידור (§7, §14).
  * השדות המוצגים נקבעים בהגדרות ולא בקוד.
  */
+const teamQuery = z
+  .object({
+    siteId: uuid,
+    date: dateStr.optional(),
+    from: dateStr.optional(),
+    to: dateStr.optional(),
+    domainId: uuid.optional(),
+    // מדריך: רק המטמיעים שמשויכים אליו
+    mine: z.enum(['1', '0', 'true', 'false']).optional().transform((v) => v === '1' || v === 'true'),
+  })
+  .refine((v) => v.date || (v.from && v.to), { message: 'יש לבחור תאריך או טווח', path: ['date'] });
+
+/** הרשומות של הלו״ז הצוותי — רק השדות שהותרו בהגדרות יוצאים מכאן */
+async function loadTeam(req, q) {
+  const { siteId, domainId, mine } = q;
+  const from = q.from ?? q.date;
+  const to = q.to ?? q.date;
+
+  const [setting] = await query(
+    `select value from app_settings where key = 'team_schedule_fields'`,
+  );
+  const allowed = new Set(setting?.value ?? ['name', 'activity', 'site', 'status']);
+
+  const rows = await query(
+    `select entry_date::text as entry_date, user_id, person_name, activity_name, location_name,
+            site_id, domain_name, starts_at, ends_at, status_he, kind
+       from v_team_schedule
+      where site_id = $1 and entry_date between $2::date and $3::date
+        and $3::date - $2::date <= 31
+        and ($4::uuid is null or domain_id = $4)
+        and (not $5 or user_id = any($6::uuid[]))
+      order by entry_date, starts_at, person_name`,
+    [siteId, from, to, domainId ?? null, mine, req.user.scopes.assignedUserIds],
+  );
+
+  // רק השדות שהותרו יוצאים מהשרת — הסתרה בלקוח אינה מזעור מידע.
+  // מזהה האדם יוצא רק כשהשם מותר: הוא מה שמאפשר תצוגת מטריצה.
+  const entries = rows.map((r) => ({
+    date: r.entry_date,
+    ...(allowed.has('name') ? { personId: r.user_id, name: r.person_name } : {}),
+    ...(allowed.has('activity') ? { activity: r.activity_name } : {}),
+    ...(allowed.has('site') ? { location: r.location_name } : {}),
+    ...(allowed.has('status') ? { status: r.status_he } : {}),
+    ...(allowed.has('time')
+      ? { time: `${fmt(r.starts_at)}–${fmt(r.ends_at)}` }
+      : {}),
+    ...(allowed.has('domain') ? { domain: r.domain_name } : {}),
+    kind: r.kind,
+  }));
+
+  return { from, to, fields: [...allowed], entries };
+}
+
+/**
+ * לו״ז צוותי.
+ *
+ * קורא מ-v_team_schedule, שבו מזעור המידע נאכף במקום אחד: אין סיבות
+ * אילוץ, אין הערות פרטיות ואין טיוטות סידור (§7, §14).
+ * השדות המוצגים נקבעים בהגדרות ולא בקוד.
+ */
 scheduleRouter.get(
   '/team',
   requirePermission('teamSchedule', 'view', (req) => ({ siteId: req.query.siteId })),
-  validate({
-    query: z
-      .object({
-        siteId: uuid,
-        date: dateStr.optional(),
-        from: dateStr.optional(),
-        to: dateStr.optional(),
-        domainId: uuid.optional(),
-        // מדריך: רק המטמיעים שמשויכים אליו
-        mine: z.enum(['1', '0', 'true', 'false']).optional().transform((v) => v === '1' || v === 'true'),
-      })
-      .refine((v) => v.date || (v.from && v.to), { message: 'יש לבחור תאריך או טווח', path: ['date'] }),
-  }),
+  validate({ query: teamQuery }),
   async (req, res) => {
-    const { siteId, domainId, mine } = req.validQuery;
-    const from = req.validQuery.from ?? req.validQuery.date;
-    const to = req.validQuery.to ?? req.validQuery.date;
+    const team = await loadTeam(req, req.validQuery);
+    res.json({ date: team.from, ...team });
+  },
+);
 
-    const [setting] = await query(
-      `select value from app_settings where key = 'team_schedule_fields'`,
-    );
-    const allowed = new Set(setting?.value ?? ['name', 'activity', 'site', 'status']);
+const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+const LIST_LABELS = { name: 'שם', activity: 'פעילות', location: 'מיקום', time: 'שעות', domain: 'תחום', status: 'סטטוס' };
 
-    const rows = await query(
-      `select entry_date::text as entry_date, person_name, activity_name, location_name,
-              site_id, domain_name, starts_at, ends_at, status_he, kind
-         from v_team_schedule
-        where site_id = $1 and entry_date between $2::date and $3::date
-          and $3::date - $2::date <= 31
-          and ($4::uuid is null or domain_id = $4)
-          and (not $5 or user_id = any($6::uuid[]))
-        order by entry_date, starts_at, person_name`,
-      [siteId, from, to, domainId ?? null, mine, req.user.scopes.assignedUserIds],
-    );
+/** פריט אחד בתא של המטריצה: "08:00–14:00 הדרכה · מיון" */
+const cellText = (e) =>
+  [e.time, [e.activity, e.location].filter(Boolean).join(' · ') || e.status].filter(Boolean).join(' ');
 
-    // רק השדות שהותרו יוצאים מהשרת — הסתרה בלקוח אינה מזעור מידע
-    const entries = rows.map((r) => ({
-      date: r.entry_date,
-      ...(allowed.has('name') ? { name: r.person_name } : {}),
-      ...(allowed.has('activity') ? { activity: r.activity_name } : {}),
-      ...(allowed.has('site') ? { location: r.location_name } : {}),
-      ...(allowed.has('status') ? { status: r.status_he } : {}),
-      ...(allowed.has('time')
-        ? { time: `${fmt(r.starts_at)}–${fmt(r.ends_at)}` }
-        : {}),
-      ...(allowed.has('domain') ? { domain: r.domain_name } : {}),
-      kind: r.kind,
-    }));
+/**
+ * ייצוא הלו״ז הצוותי ל-CSV — כרשימה, או כמטריצה של אנשים × ימים.
+ * אותם שדות בדיוק כמו במסך.
+ */
+scheduleRouter.get(
+  '/team/export',
+  requirePermission('teamSchedule', 'view', (req) => ({ siteId: req.query.siteId })),
+  validate({ query: teamQuery.and(z.object({ layout: z.enum(['matrix', 'list']).default('list') })) }),
+  async (req, res) => {
+    const { from, to, fields, entries } = await loadTeam(req, req.validQuery);
+    const layout = fields.includes('name') ? req.validQuery.layout : 'list';
 
-    res.json({ date: from, from, to, fields: [...allowed], entries });
+    let rows;
+    if (layout === 'matrix') {
+      const days = [];
+      for (let d = new Date(`${from}T12:00:00Z`); d <= new Date(`${to}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) {
+        days.push(d.toISOString().slice(0, 10));
+      }
+      const dayLabel = (iso) => `${DAY_NAMES[new Date(`${iso}T12:00:00Z`).getUTCDay()]} ${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+      const people = new Map();
+      for (const e of entries) if (!people.has(e.personId)) people.set(e.personId, e.name);
+      rows = [...people.entries()]
+        .sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'he'))
+        .map(([personId, name]) => ({
+          שם: name,
+          ...Object.fromEntries(days.map((d) => [
+            dayLabel(d),
+            entries.filter((e) => e.personId === personId && e.date === d).map(cellText).join('\n'),
+          ])),
+        }));
+    } else {
+      const keys = Object.keys(LIST_LABELS).filter(
+        (k) => fields.includes(k) || (k === 'location' && fields.includes('site')),
+      );
+      rows = entries.map((e) => ({
+        תאריך: e.date,
+        ...Object.fromEntries(keys.map((k) => [LIST_LABELS[k], e[k] ?? ''])),
+      }));
+    }
+
+    await recordExport(req, { entityType: 'team_schedule', filters: req.validQuery, rowCount: rows.length });
+    sendCsv(res, `לוז-צוות-${from}${to !== from ? `-${to}` : ''}.csv`, rows);
   },
 );
 

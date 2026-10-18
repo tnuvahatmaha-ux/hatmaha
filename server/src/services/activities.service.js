@@ -490,6 +490,31 @@ export async function board({ siteId, weekStart }) {
     ),
   ]);
 
+  // אילוצים של המטמיעים בשבוע: בקשות אילוץ שאושרו או ממתינות, ו"לא יכול"
+  // מהצהרת הזמינות. רק סוג האילוץ והשעות — בלי הסיבה (§7).
+  const ids = people.map((p) => p.id);
+  const constraints = ids.length === 0 ? [] : await query(
+    `select cr.user_id, cr.constraint_date::text as date, cr.start_time, cr.end_time,
+            cr.status::text as status, ct.name_he as type_name
+       from constraint_requests cr
+       join constraint_types ct on ct.id = cr.constraint_type_id
+      where cr.deleted_at is null and cr.status in ('submitted', 'approved')
+        and cr.constraint_date between $1::date and $2::date
+        and cr.user_id = any($3::uuid[])
+     union all
+     select d.user_id, c.cell_date::text, c.start_time, c.end_time,
+            case when d.status::text = 'pending_approval' then 'submitted' else 'approved' end,
+            'לא יכול'
+       from availability_cells c
+       join availability_declarations d on d.id = c.declaration_id
+      where d.site_id = $4 and d.week_start = $1::date and c.value = 'cannot'
+        and d.status in ('ok', 'pending_approval', 'approved')
+        and d.superseded_at is null and d.deleted_at is null
+        and d.user_id = any($3::uuid[])
+      order by 2, 3`,
+    [weekStart, to, ids, siteId],
+  );
+
   const byActivity = new Map();
   for (const p of participants) {
     if (!byActivity.has(p.activity_id)) byActivity.set(p.activity_id, []);
@@ -503,6 +528,7 @@ export async function board({ siteId, weekStart }) {
     people,
     activities: activities.map((a) => ({ ...a, participant_ids: byActivity.get(a.id) ?? [] })),
     shifts,
+    constraints,
   };
 }
 
