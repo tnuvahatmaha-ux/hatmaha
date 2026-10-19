@@ -464,9 +464,10 @@ export async function board({ siteId, weekStart }) {
       [siteId, weekStart, to],
     ),
     query(
-      `select ap.activity_id, ap.user_id, ap.attendance
+      `select ap.activity_id, ap.user_id, ap.attendance, p.full_name, p.base_role::text as base_role
          from activity_participants ap
          join activities a on a.id = ap.activity_id
+         join profiles p on p.id = ap.user_id
         where a.site_id = $1 and a.activity_date between $2 and $3 and a.deleted_at is null`,
       [siteId, weekStart, to],
     ),
@@ -516,9 +517,12 @@ export async function board({ siteId, weekStart }) {
   );
 
   const byActivity = new Map();
+  const namesByActivity = new Map();
   for (const p of participants) {
     if (!byActivity.has(p.activity_id)) byActivity.set(p.activity_id, []);
     byActivity.get(p.activity_id).push(p.user_id);
+    if (!namesByActivity.has(p.activity_id)) namesByActivity.set(p.activity_id, []);
+    namesByActivity.get(p.activity_id).push({ id: p.user_id, name: p.full_name, role: p.base_role });
   }
 
   return {
@@ -526,7 +530,11 @@ export async function board({ siteId, weekStart }) {
     days,
     phases: Object.fromEntries(phaseRows.map((r) => [r.day, r.period])),
     people,
-    activities: activities.map((a) => ({ ...a, participant_ids: byActivity.get(a.id) ?? [] })),
+    activities: activities.map((a) => ({
+      ...a,
+      participant_ids: byActivity.get(a.id) ?? [],
+      participants: (namesByActivity.get(a.id) ?? []).sort((x, y) => x.name.localeCompare(y.name, 'he')),
+    })),
     shifts,
     constraints,
   };

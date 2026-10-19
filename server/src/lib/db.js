@@ -89,6 +89,9 @@ export async function queryRequired(sql, params = [], message = 'הפריט המ
 export async function withTransaction(ctx, fn) {
   const client = await pool.connect();
   const tx = makeTx(client);
+  // פעולות שאסור שיקרו לפני שהטרנזקציה נשמרה (למשל Push לטלפון) — רצות רק אחרי commit
+  const afterCommit = [];
+  tx.afterCommit = (fn) => afterCommit.push(fn);
 
   try {
     await client.query('begin');
@@ -99,6 +102,9 @@ export async function withTransaction(ctx, fn) {
 
     const result = await fn(tx);
     await client.query('commit');
+    for (const job of afterCommit) {
+      Promise.resolve().then(job).catch((err) => logger.warn('פעולה שאחרי commit נכשלה', { message: err.message }));
+    }
     return result;
   } catch (err) {
     try {

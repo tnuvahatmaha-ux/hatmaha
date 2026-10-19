@@ -90,6 +90,31 @@ export default function MentorsTab() {
                 {mentor.email}{mentor.phone && ` · ${mentor.phone}`}
               </div>
 
+              <div className="bold small" style={{ marginBlockEnd: 6 }}>
+                המטמיעים של {mentor.full_name.split(' ')[0]} ({mentor.implementers?.length ?? 0})
+              </div>
+              {(mentor.implementers ?? []).length === 0 ? (
+                <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>עדיין לא שויכו מטמיעים.</p>
+              ) : (
+                <div className="table-wrap" style={{ marginBlockEnd: 'var(--space-4)' }}>
+                  <table className="table table-cards">
+                    <thead><tr><th>שם</th><th>שיוך</th><th>אתר</th><th>תחום</th></tr></thead>
+                    <tbody>
+                      {mentor.implementers.map((i) => (
+                        <tr key={i.id}>
+                          <td data-label="שם" className="bold">{i.name}</td>
+                          <td data-label="שיוך">{i.isPrimary ? <Tag tone="accent">מדריך ראשי</Tag> : <Tag>תומך</Tag>}</td>
+                          <td data-label="אתר" className="small">{i.sites ?? '—'}</td>
+                          <td data-label="תחום" className="small">{i.domains ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="bold small" style={{ marginBlockEnd: 6 }}>תחומי אחריות</div>
+
               {mentor.responsibilities.length === 0 ? (
                 <Notice tone="warn" icon="⚠" title="אין תחומי אחריות">
                   בלי תחום אחריות אי אפשר לשייך למדריך הזה אף מטמיע.

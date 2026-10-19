@@ -1,8 +1,13 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { AttendanceCard } from '../components/AttendanceCard.jsx';
+import { PushToggle } from '../components/PushToggle.jsx';
+import { RequestManageDialog } from '../components/RequestManage.jsx';
+import { ActivityDetailDialog } from '../components/ActivityDetail.jsx';
 import { usePermissions } from '../context/PermissionsContext.jsx';
 import { useApi } from '../lib/useApi.js';
 import { ViewHead, Avatar } from '../components/layout/AppLayout.jsx';
-import { Panel, StateView, Tag, Notice, Empty } from '../components/ui/index.jsx';
+import { Panel, StateView, Tag, Notice, Empty, Modal } from '../components/ui/index.jsx';
 import { fmtTime, fmtDate, dayName, today, addDays, ROLE_NAMES, statusTone, STATUS_NAMES } from '../lib/format.js';
 
 /**
@@ -24,6 +29,14 @@ export default function Home() {
   const pendingRequests = useApi(approver ? '/api/requests' : null, { status: 'submitted', limit: 100 });
   const pendingExceptions = useApi(approver ? '/api/exceptions' : null, { status: 'pending', limit: 100 });
   const pendingAvailability = useApi(approver ? '/api/availability/pending' : null);
+  const approvedConstraints = useApi(approver ? '/api/requests' : null, {
+    status: 'approved', from, to: addDays(from, 13), limit: 200,
+  });
+  const myRequests = useApi(submitsAvailability ? '/api/requests' : null, { status: 'draft', limit: 50 });
+  const returned = (myRequests.data?.requests ?? []).filter((r) => r.returned_at && r.user_id === profile?.id);
+  const [showApproved, setShowApproved] = useState(false);
+  const [openActivity, setOpenActivity] = useState(null);
+  const clocksIn = ['implementer', 'lead'].includes(role);
 
   const awaitingAck = (inbox.data?.updates ?? []).filter((u) => u.requires_ack && !u.acknowledged_at);
   const pendingCount =
@@ -59,6 +72,17 @@ export default function Home() {
         </Notice>
       )}
 
+      <PushToggle compact />
+
+      {returned.length > 0 && (
+        <Notice tone="warn" icon="↩" title={`${returned.length} בקשות הוחזרו אליך לתיקון`}>
+          <div className="row">
+            <span className="small">{returned.slice(0, 2).map((r) => r.return_note).filter(Boolean).join(' · ')}</span>
+            <Link to="/requests" className="btn btn-sm row-end">לתיקון</Link>
+          </div>
+        </Notice>
+      )}
+
       {awaitingAck.length > 0 && (
         <Notice tone="warn" icon="💬" title={`${awaitingAck.length} הודעות ממתינות לאישור קריאה`}>
           <div className="row">
@@ -80,7 +104,7 @@ export default function Home() {
             >
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
                 {todayItems.map((item) => (
-                  <ScheduleRow key={`${item.kind}-${item.id}`} item={item} />
+                  <ScheduleRow key={`${item.kind}-${item.id}`} item={item} onOpen={setOpenActivity} />
                 ))}
               </ul>
             </StateView>
@@ -96,7 +120,7 @@ export default function Home() {
             ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
                 {upcoming.map((item) => (
-                  <ScheduleRow key={`${item.kind}-${item.id}`} item={item} showDate />
+                  <ScheduleRow key={`${item.kind}-${item.id}`} item={item} showDate onOpen={setOpenActivity} />
                 ))}
               </ul>
             )}
@@ -104,6 +128,8 @@ export default function Home() {
         </div>
 
         <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+          {clocksIn && <AttendanceCard />}
+
           <Panel title="הפרופיל שלי">
             <div className="row" style={{ marginBlockEnd: 'var(--space-3)' }}>
               <Avatar name={profile?.full_name} size={44} />
@@ -141,6 +167,18 @@ export default function Home() {
                 בקשות, חריגות והצהרות זמינות שמחכות להחלטה.
               </p>
               <Link to="/approvals" className="btn btn-sm">לבקשות ואישורים</Link>
+            </Panel>
+          )}
+
+          {approver && (
+            <Panel title="אילוצים שאושרו" subtitle="בשבועיים הקרובים">
+              <div className="kpi-value" style={{ marginBlockEnd: 6 }}>
+                {approvedConstraints.data?.requests?.length ?? '—'}
+              </div>
+              <p className="small muted" style={{ marginBlockEnd: 'var(--space-3)' }}>
+                פירוט, עריכה, ביטול או החזרה למטמיע לתיקון.
+              </p>
+              <button type="button" className="btn btn-sm" onClick={() => setShowApproved(true)}>לפירוט</button>
             </Panel>
           )}
 
@@ -238,17 +276,64 @@ export default function Home() {
           </Panel>
         </>
       )}
+
+      {openActivity && <ActivityDetailDialog activityId={openActivity} onClose={() => setOpenActivity(null)} />}
+      {showApproved && <ApprovedConstraintsDialog query={approvedConstraints} onClose={() => setShowApproved(false)} />}
     </>
   );
 }
 
-function ScheduleRow({ item, showDate }) {
+/** האילוצים שאושרו לשבועיים הקרובים — ומכל שורה אפשר לנהל את הבקשה */
+function ApprovedConstraintsDialog({ query, onClose }) {
+  const [selected, setSelected] = useState(null);
+  const rows = query.data?.requests ?? [];
+  return (
+    <>
+      <Modal title="אילוצים שאושרו — שבועיים קרובים" onClose={onClose} width={720}
+        footer={<>
+          <Link to="/approvals" className="btn btn-sm">להיסטוריה המלאה</Link>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>סגירה</button>
+        </>}>
+        <StateView loading={query.loading} error={query.error} onRetry={query.reload}
+          empty={!query.loading && rows.length === 0} emptyProps={{ icon: '✓', title: 'אין אילוצים מאושרים בשבועיים הקרובים' }}>
+          <div className="table-wrap">
+            <table className="table table-cards">
+              <thead><tr><th>מטמיע</th><th>סוג</th><th>תאריך</th><th>שעות</th><th /></tr></thead>
+              <tbody>
+                {rows.slice().reverse().map((r) => (
+                  <tr key={r.id}>
+                    <td data-label="מטמיע" className="bold">{r.user_name}</td>
+                    <td data-label="סוג">{r.type_name}</td>
+                    <td data-label="תאריך" className="tnum">{dayName(r.constraint_date)} {fmtDate(r.constraint_date)}</td>
+                    <td data-label="שעות" className="tnum">{r.start_time.slice(0, 5)}–{r.end_time.slice(0, 5)}</td>
+                    <td><button type="button" className="btn btn-sm" onClick={() => setSelected(r)}>ניהול</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </StateView>
+      </Modal>
+      {selected && (
+        <RequestManageDialog request={selected} onClose={() => setSelected(null)} onChanged={query.reload} />
+      )}
+    </>
+  );
+}
+
+function ScheduleRow({ item, showDate, onOpen }) {
+  const clickable = item.kind === 'activity' && onOpen;
   const tone = { shift: 'accent', activity: '', constraint: 'warn' }[item.kind];
   const kindLabel = { shift: 'משמרת', activity: 'פעילות', constraint: 'אילוץ' }[item.kind];
 
   return (
     <li
+      onClick={clickable ? () => onOpen(item.id) : undefined}
+      onKeyDown={clickable ? (e) => { if (e.key === 'Enter') onOpen(item.id); } : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      role={clickable ? 'button' : undefined}
       style={{
+        cursor: clickable ? 'pointer' : undefined,
         display: 'flex', gap: 'var(--space-3)', alignItems: 'center',
         padding: 'var(--space-3) var(--space-4)',
         borderBlockEnd: '1px solid var(--line-soft)',

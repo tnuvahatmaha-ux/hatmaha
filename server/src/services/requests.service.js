@@ -21,6 +21,8 @@ const BASE_SELECT = `
          cr.note, cr.status::text as status, cr.submitted_at, cr.decided_at,
          cr.decision_note, cr.auto_approved, cr.approver_user_id, cr.row_version,
          cr.created_at, cr.rule_evaluation_id,
+         cr.returned_at, cr.return_note, returner.full_name as returned_by_name,
+         cr.cancelled_at, canceller.full_name as cancelled_by_name,
          ct.name_he as type_name, ct.code as type_code,
          p.full_name as user_name,
          approver.full_name as approver_name,
@@ -32,6 +34,8 @@ const BASE_SELECT = `
     join constraint_types ct on ct.id = cr.constraint_type_id
     join profiles p on p.id = cr.user_id
     left join profiles approver on approver.id = cr.approver_user_id
+    left join profiles returner on returner.id = cr.returned_by
+    left join profiles canceller on canceller.id = cr.cancelled_by
     left join sites s on s.id = cr.site_id
    where cr.deleted_at is null`;
 
@@ -41,7 +45,7 @@ export async function list(principal, filters = {}) {
   return query(
     `${BASE_SELECT}
        and ($1 or cr.user_id = $2 or cr.user_id = any($3::uuid[]) or cr.site_id = any($4::uuid[]))
-       and ($5::text is null or cr.status::text = $5)
+       and ($5::text[] is null or cr.status::text = any($5::text[]))
        and ($6::uuid is null or cr.user_id = $6)
        and ($7::uuid is null or cr.site_id = $7)
        and ($8::date is null or cr.constraint_date >= $8)
@@ -53,7 +57,7 @@ export async function list(principal, filters = {}) {
       principal.userId,
       principal.scopes.assignedUserIds,
       principal.scopes.siteIds,
-      filters.status ?? null,
+      filters.status ? String(filters.status).split(',') : null,
       filters.userId ?? null,
       filters.siteId ?? null,
       filters.from ?? null,
@@ -351,6 +355,119 @@ export async function decide(actor, requestId, { decision, comment, traceId }) {
     });
 
     return { request: await getIn(tx, requestId), alreadyDecided: false };
+  });
+}
+
+/**
+ * עריכת בקשה.
+ * המגיש — רק בטיוטה (כולל בקשה שהוחזרה אליו לתיקון), ואז מגיש מחדש.
+ * מאשר (מנהל / מדריך) — גם בקשה שהוגשה או אושרה; הסטטוס נשמר והמטמיע מקבל התראה.
+ */
+export async function update(actor, requestId, input, { canApprove }) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const row = await tx.lock('constraint_requests', requestId);
+    if (!row || row.deleted_at) throw new AppError('E_NOT_FOUND', 'הבקשה המבוקשת לא נמצאה');
+
+    const isOwner = row.user_id === actor.userId;
+    if (!(canApprove && ['draft', 'submitted', 'approved'].includes(row.status))
+        && !(isOwner && row.status === 'draft')) {
+      throw new AppError('E_STATE', 'אפשר לערוך רק טיוטה או בקשה שהוחזרה לתיקון');
+    }
+
+    const date = input.constraintDate ?? row.constraint_date;
+    const start = input.startTime ?? row.start_time;
+    const end = input.endTime ?? row.end_time;
+    if (start.slice(0, 5) === end.slice(0, 5)) throw new AppError('E_VALIDATION', 'שעת הסיום זהה לשעת ההתחלה');
+    const [site] = row.site_id ? await tx.query('select timezone from sites where id = $1', [row.site_id]) : [];
+    const { startsAt, endsAt } = toInstants(date, start, end, site?.timezone);
+
+    await tx.query(
+      `update constraint_requests
+          set constraint_type_id = coalesce($2, constraint_type_id), constraint_date = $3,
+              start_time = $4, end_time = $5, starts_at = $6, ends_at = $7,
+              note = case when $8::boolean then $9 else note end
+        where id = $1`,
+      [requestId, input.constraintTypeId ?? null, date, start, end, startsAt, endsAt,
+       input.note !== undefined, input.note ?? null],
+    );
+
+    if (!isOwner && row.status !== 'draft') {
+      await notify(tx, {
+        typeCode: 'request_changed',
+        recipientIds: [row.user_id],
+        title: 'הבקשה שלך עודכנה',
+        body: `${actor.fullName ?? 'המנהל'} עדכן/ה את הבקשה: ${await summaryOf(tx, requestId)}`,
+        entityType: 'constraint_requests',
+        entityId: requestId,
+      });
+    }
+    return getIn(tx, requestId);
+  });
+}
+
+/** החזרה למטמיע לתיקון: הבקשה חוזרת לטיוטה, עם הערה, והוא מתקן ומגיש שוב */
+export async function returnForFix(actor, requestId, { note }) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const row = await tx.lock('constraint_requests', requestId);
+    if (!row || row.deleted_at) throw new AppError('E_NOT_FOUND', 'הבקשה המבוקשת לא נמצאה');
+    if (!['submitted', 'approved'].includes(row.status)) {
+      throw new AppError('E_STATE', 'אפשר להחזיר לתיקון רק בקשה שהוגשה או אושרה');
+    }
+
+    await tx.query(
+      `update constraint_requests
+          set status = 'draft', returned_at = now(), returned_by = $2, return_note = $3,
+              decided_at = null, approver_user_id = null, auto_approved = false, decision_note = null
+        where id = $1`,
+      [requestId, actor.userId, note],
+    );
+    await tx.query(
+      `update exception_requests
+          set status = 'cancelled', decided_at = now(), decision_comment = 'הבקשה הוחזרה לתיקון'
+        where subject_type = 'constraint' and subject_id = $1 and status = 'pending'`,
+      [requestId],
+    );
+    await notify(tx, {
+      typeCode: 'request_returned',
+      recipientIds: [row.user_id],
+      title: 'בקשה הוחזרה אליך לתיקון',
+      body: note,
+      entityType: 'constraint_requests',
+      entityId: requestId,
+    });
+    return getIn(tx, requestId);
+  });
+}
+
+/** ביטול בקשה שאושרה (או שממתינה) ע״י מאשר — עם נימוק, והמטמיע מקבל התראה */
+export async function revoke(actor, requestId, { note }) {
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const row = await tx.lock('constraint_requests', requestId);
+    if (!row || row.deleted_at) throw new AppError('E_NOT_FOUND', 'הבקשה המבוקשת לא נמצאה');
+    if (row.status === 'cancelled') return { request: await getIn(tx, requestId), alreadyCancelled: true };
+
+    await tx.query(
+      `update constraint_requests
+          set status = 'cancelled', cancelled_at = now(), cancelled_by = $2,
+              decision_note = coalesce($3, decision_note)
+        where id = $1`,
+      [requestId, actor.userId, note ?? null],
+    );
+    await tx.query(
+      `update exception_requests
+          set status = 'cancelled', decided_at = now(), decision_comment = 'הבקשה בוטלה'
+        where subject_type = 'constraint' and subject_id = $1 and status = 'pending'`,
+      [requestId],
+    );
+    await notify(tx, {
+      typeCode: 'request_changed',
+      recipientIds: [row.user_id],
+      title: 'האילוץ שלך בוטל',
+      body: note ? `${await summaryOf(tx, requestId)} — ${note}` : await summaryOf(tx, requestId),
+      entityType: 'constraint_requests',
+      entityId: requestId,
+    });
+    return { request: await getIn(tx, requestId), alreadyCancelled: false };
   });
 }
 

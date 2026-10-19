@@ -5,11 +5,14 @@ import { useToast } from '../context/ToastContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
 import { Panel, StateView, Tag, Segmented, Empty } from '../components/ui/index.jsx';
 import { fmtDate, dayName, today, addDays, weekStartOf, STATUS_NAMES } from '../lib/format.js';
+import { PersonReport } from '../components/PersonReport.jsx';
+import { ActivityDetailDialog } from '../components/ActivityDetail.jsx';
 
 /** דוחות: שעות, כיסוי משמרות, הכשרה, ובקשות וחריגות. */
 export default function Reports() {
   const toast = useToast();
   const [tab, setTab] = useState('workload');
+  const [personId, setPersonId] = useState('');
   const [range, setRange] = useState({
     from: weekStartOf(today()),
     to: addDays(weekStartOf(today()), 27),
@@ -32,6 +35,7 @@ export default function Reports() {
             onChange={setTab}
             options={[
               { value: 'workload', label: 'שעות' },
+              { value: 'person', label: 'לפי מטמיע' },
               { value: 'coverage', label: 'כיסוי' },
               { value: 'training', label: 'הכשרה' },
               { value: 'requests', label: 'בקשות' },
@@ -40,6 +44,7 @@ export default function Reports() {
         }
       />
 
+      {tab === 'person' ? <PersonTab range={range} sites={sites} personId={personId} setPersonId={setPersonId} /> : (<>
       <Panel title="סינון" flush>
         <div className="panel-body row">
           <label className="small">
@@ -65,7 +70,88 @@ export default function Reports() {
       {tab === 'coverage' && <Coverage range={range} />}
       {tab === 'training' && <Training range={range} />}
       {tab === 'requests' && <Requests range={range} />}
+      </>)}
     </>
+  );
+}
+
+/** דוח למטמיע אחד: הלו״ז הנוכחי שלו, ושעות / משמרות / נוכחות / חופשים לפי שבוע וחודש */
+function PersonTab({ personId, setPersonId }) {
+  const [siteId, setSiteId] = useState('');
+  const sites = useApi('/api/sites');
+  const people = useApi('/api/users', { status: 'active', siteId: siteId || undefined, limit: 500 });
+  const implementers = (people.data?.users ?? [])
+    .filter((u) => ['implementer', 'lead'].includes(u.base_role))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name, 'he'));
+  const [view, setView] = useState('hours');
+
+  return (
+    <>
+      <Panel title="בחירת מטמיע" flush>
+        <div className="panel-body row" style={{ gap: 'var(--space-3)' }}>
+          <select value={siteId} onChange={(e) => setSiteId(e.target.value)} aria-label="אתר" style={{ width: 'auto' }}>
+            <option value="">כל האתרים</option>
+            {(sites.data?.sites ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <select value={personId} onChange={(e) => setPersonId(e.target.value)} aria-label="מטמיע" style={{ width: 'auto', minWidth: 200 }}>
+            <option value="">— בחירת מטמיע —</option>
+            {implementers.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+          </select>
+          {personId && (
+            <Segmented label="תצוגה" value={view} onChange={setView}
+              options={[{ value: 'hours', label: 'שעות והיסטוריה' }, { value: 'schedule', label: 'לו״ז נוכחי' }]} />
+          )}
+        </div>
+      </Panel>
+      {!personId
+        ? <Empty icon="👤" title="בחר/י מטמיע כדי לראות את הדוח" />
+        : view === 'hours' ? <PersonReport userId={personId} /> : <PersonWeek userId={personId} />}
+    </>
+  );
+}
+
+/** הלו״ז של המטמיע לשבועיים הקרובים — אותו מקור כמו "הלו״ז שלי" שלו */
+function PersonWeek({ userId }) {
+  const from = weekStartOf(today());
+  const schedule = useApi('/api/schedule/me', { from, to: addDays(from, 13), userId });
+  const [openActivity, setOpenActivity] = useState(null);
+  const items = schedule.data?.items ?? [];
+  const days = [...new Set(items.map((i) => i.entry_date))];
+  return (
+    <StateView loading={schedule.loading} error={schedule.error} onRetry={schedule.reload}
+      empty={!schedule.loading && items.length === 0} emptyProps={{ icon: '🗓️', title: 'אין שיבוצים בשבועיים הקרובים' }}>
+      {days.map((d) => (
+        <Panel key={d} title={`${dayName(d)} · ${fmtDate(d)}`} flush>
+          <div className="table-wrap">
+            <table className="table table-cards">
+              <tbody>
+                {items.filter((i) => i.entry_date === d).map((i) => (
+                  <tr key={`${i.kind}-${i.id}`} style={i.overlap ? { background: 'var(--danger-bg)' } : undefined}>
+                    <td data-label="שעות" className="tnum bold nowrap">
+                      {new Date(i.starts_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}–
+                      {new Date(i.ends_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td data-label="מה">{i.title}</td>
+                    <td data-label="איפה" className="small">{[i.site_name, i.location_name].filter(Boolean).join(' · ') || '—'}</td>
+                    <td data-label="סוג">
+                      <Tag tone={{ shift: 'accent', activity: '', constraint: 'warn' }[i.kind]}>
+                        {{ shift: 'משמרת', activity: 'פעילות', constraint: 'אילוץ' }[i.kind]}
+                      </Tag>
+                    </td>
+                    <td>
+                      {i.kind === 'activity' && (
+                        <button type="button" className="btn btn-sm" onClick={() => setOpenActivity(i.id)}>פירוט</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      ))}
+      {openActivity && <ActivityDetailDialog activityId={openActivity} onClose={() => setOpenActivity(null)} />}
+    </StateView>
   );
 }
 
@@ -175,6 +261,8 @@ function Training({ range }) {
   const rows = report.data?.rows ?? [];
 
   return (
+    <>
+    <TrainingProgress range={range} />
     <Panel title="מצב הכשרה" subtitle="התקדמות במסלול ההכשרה לכל מטמיע" flush>
       <StateView
         loading={report.loading}
@@ -202,6 +290,49 @@ function Training({ range }) {
                       <span className="tnum small bold">{row.percent}%</span>
                     </div>
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </StateView>
+    </Panel>
+    </>
+  );
+}
+
+/** התקדמות לפי שלב: מאושר מול צפוי לפי לוח הזמנים */
+function TrainingProgress({ range }) {
+  const toast = useToast();
+  const filters = { siteId: range.siteId, domainId: range.domainId };
+  const report = useApi('/api/training/report', filters);
+  const rows = report.data?.rows ?? [];
+  return (
+    <Panel
+      title="דוח התקדמות הכשרה"
+      subtitle="לכל שלב בגאנט: אחוז מאושר מול הצפוי לפי התאריכים"
+      actions={<button type="button" className="btn btn-sm"
+        onClick={() => download('/api/training/report/export.csv', filters, 'התקדמות-הכשרה.csv').catch(toast.error)}>ייצוא CSV</button>}
+      flush
+    >
+      <StateView loading={report.loading} error={report.error} onRetry={report.reload}
+        empty={!report.loading && rows.length === 0}
+        emptyProps={{ icon: '🎓', title: 'עדיין אין תוכניות הכשרה', text: 'יוצרים תוכנית במסך "הכשרה".' }}>
+        <div className="table-wrap">
+          <table className="table table-cards">
+            <thead><tr><th>מטמיע</th><th>שלב</th><th>תאריכים</th><th>התקדמות</th><th>צפוי</th><th /></tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td data-label="מטמיע" className="bold">{r.full_name}<div className="tiny muted">{r.mentor_name ?? ''}</div></td>
+                  <td data-label="שלב">{r.item_title}</td>
+                  <td data-label="תאריכים" className="tnum small">{r.start_on ? fmtDate(r.start_on) : '—'} – {r.due_on ? fmtDate(r.due_on) : '—'}</td>
+                  <td data-label="התקדמות">
+                    <div className="progress"><div className="progress-fill" style={{ width: `${r.progress_pct}%` }} /></div>
+                    <span className="tnum small bold">{r.progress_pct}%</span>
+                  </td>
+                  <td data-label="צפוי" className="tnum small">{r.expected_pct != null ? `${r.expected_pct}%` : '—'}</td>
+                  <td>{r.completed_on ? <Tag tone="ok">הושלם</Tag> : r.behind ? <Tag tone="warn">בפיגור</Tag> : null}</td>
                 </tr>
               ))}
             </tbody>

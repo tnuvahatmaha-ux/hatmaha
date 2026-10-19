@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApi, useAction } from '../lib/useApi.js';
-import { get, post, put, newIdempotencyKey } from '../lib/api.js';
+import { get, post, put, patch, newIdempotencyKey } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { usePermissions } from '../context/PermissionsContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
@@ -562,6 +562,7 @@ function ConstraintsTab() {
   const toast = useToast();
   const requests = useApi('/api/requests', { limit: 100 });
   const [showForm, setShowForm] = useState(false);
+  const [fixing, setFixing] = useState(null);
 
   return (
     <>
@@ -599,13 +600,21 @@ function ConstraintsTab() {
               </thead>
               <tbody>
                 {(requests.data?.requests ?? []).map((request) => (
-                  <RequestRow key={request.id} request={request} onChanged={requests.reload} />
+                  <RequestRow key={request.id} request={request} onChanged={requests.reload} onFix={setFixing} />
                 ))}
               </tbody>
             </table>
           </div>
         </StateView>
       </Panel>
+
+      {fixing && (
+        <ConstraintForm
+          existing={fixing}
+          onClose={() => setFixing(null)}
+          onSaved={() => { setFixing(null); requests.reload(); toast.success('הבקשה הוגשה מחדש'); }}
+        />
+      )}
 
       {showForm && (
         <ConstraintForm
@@ -621,9 +630,10 @@ function ConstraintsTab() {
   );
 }
 
-function RequestRow({ request, onChanged }) {
+function RequestRow({ request, onChanged, onFix }) {
   const toast = useToast();
   const [confirming, setConfirming] = useState(false);
+  const returned = request.status === 'draft' && request.returned_at;
 
   const cancel = useAction(
     async () => {
@@ -646,23 +656,38 @@ function RequestRow({ request, onChanged }) {
           {request.start_time.slice(0, 5)}–{request.end_time.slice(0, 5)}
         </td>
         <td data-label="סטטוס">
-          <Tag tone={statusTone(request.status)}>{STATUS_NAMES[request.status] ?? request.status}</Tag>
+          {returned
+            ? <Tag tone="warn">הוחזר לתיקון</Tag>
+            : <Tag tone={statusTone(request.status)}>{STATUS_NAMES[request.status] ?? request.status}</Tag>}
           {request.auto_approved && <span className="tiny muted"> (אוטומטי)</span>}
         </td>
         <td data-label="הערה" className="small">
           {request.note ?? '—'}
+          {returned && request.return_note && (
+            <div className="tiny" style={{ color: 'var(--warn)' }}>
+              לתיקון{request.returned_by_name ? ` (${request.returned_by_name})` : ''}: {request.return_note}
+            </div>
+          )}
           {request.decision_note && (
             <div className="tiny muted">החלטה: {request.decision_note}</div>
           )}
         </td>
         <td>
-          {canCancel && (
-            <button type="button" className="btn btn-sm" onClick={() => setConfirming(true)}>
-              ביטול
-            </button>
-          )}
+          <div className="row" style={{ gap: 4 }}>
+            {request.status === 'draft' && (
+              <button type="button" className="btn btn-sm btn-primary" onClick={() => onFix(request)}>
+                {returned ? 'תיקון והגשה' : 'עריכה והגשה'}
+              </button>
+            )}
+            {canCancel && (
+              <button type="button" className="btn btn-sm" onClick={() => setConfirming(true)}>
+                ביטול
+              </button>
+            )}
+          </div>
         </td>
       </tr>
+
 
       {confirming && (
         <tr>
@@ -684,12 +709,19 @@ function RequestRow({ request, onChanged }) {
   );
 }
 
-function ConstraintForm({ onClose, onSaved }) {
+function ConstraintForm({ onClose, onSaved, existing }) {
   const toast = useToast();
   const { sites } = usePermissions();
   const types = useApi('/api/settings/lookups/constraintTypes');
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(existing ? {
+    constraintTypeId: existing.constraint_type_id,
+    constraintDate: existing.constraint_date,
+    startTime: existing.start_time.slice(0, 5),
+    endTime: existing.end_time.slice(0, 5),
+    note: existing.note ?? '',
+    siteId: existing.site_id ?? sites[0]?.id ?? '',
+  } : {
     constraintTypeId: '',
     constraintDate: addDays(today(), 7),
     startTime: '00:00',
@@ -714,13 +746,16 @@ function ConstraintForm({ onClose, onSaved }) {
   });
 
   const check = useAction(
-    async () => setPreview(await post('/api/requests/preview', body())),
+    async () => setPreview(await post('/api/requests/preview', { ...body(), ...(existing ? { id: existing.id } : {}) })),
     { onError: (err) => toast.error(err) },
   );
 
   const submit = useAction(
     async () => {
-      const { request } = await post('/api/requests', body());
+      const { siteId: _site, ...changes } = body();
+      const { request } = existing
+        ? await patch(`/api/requests/${existing.id}`, changes)
+        : await post('/api/requests', body());
       const result = await post(
         `/api/requests/${request.id}/submit`,
         {},
@@ -746,7 +781,7 @@ function ConstraintForm({ onClose, onSaved }) {
 
   return (
     <Modal
-      title="בקשת חופשה או אילוץ"
+      title={existing ? 'תיקון הבקשה והגשה מחדש' : 'בקשת חופשה או אילוץ'}
       onClose={onClose}
       footer={
         <>

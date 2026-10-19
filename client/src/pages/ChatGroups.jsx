@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Send, Plus, Users, ChevronRight, BadgeCheck, Check } from 'lucide-react';
+import { Send, Plus, Users, ChevronRight, BadgeCheck, Check, Paperclip, X, FileText } from 'lucide-react';
 import { useApi, useAction } from '../lib/useApi.js';
 import { get, post } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
@@ -108,6 +108,8 @@ function Conversation({ group, onBack, onRead }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [text, setText] = useState('');
+  const [file, setFile] = useState(null);
+  const fileInput = useRef(null);
   const lastId = useRef(null);
   const bottom = useRef(null);
 
@@ -146,9 +148,24 @@ function Conversation({ group, onBack, onRead }) {
   const send = useAction(
     async () => {
       const body = text.trim();
-      if (!body) return;
-      const { message } = await post(`/api/chat/groups/${group.id}/messages`, { body, requiresAck });
+      if (!body && !file) return;
+      let attachment = null;
+      if (file) {
+        // הקובץ עולה ישירות ל-Storage, ורק אחר כך ההודעה נשלחת
+        const { uploadUrl, storagePath } = await post(`/api/chat/groups/${group.id}/files/sign`, {
+          fileName: file.name, sizeBytes: file.size,
+        });
+        const res = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+          body: file,
+        });
+        if (!res.ok) throw new Error(`העלאת הקובץ ${file.name} נכשלה`);
+        attachment = { storagePath, fileName: file.name, mimeType: file.type || null, sizeBytes: file.size };
+      }
+      const { message } = await post(`/api/chat/groups/${group.id}/messages`, { body, requiresAck, attachment });
       setText('');
+      setFile(null);
       setRequiresAck(false);
       if (!lastId.current || message.id > lastId.current) {
         lastId.current = message.id;
@@ -157,6 +174,22 @@ function Conversation({ group, onBack, onRead }) {
     },
     { onError: (err) => toast.error(err) },
   );
+
+  const openFile = useAction(
+    async (id) => {
+      const { url } = await get(`/api/chat/groups/${group.id}/messages/${id}/file`);
+      window.open(url, '_blank', 'noopener');
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const pickFile = (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    if (f.size > 10 * 1024 * 1024) { toast.error(new Error('הקובץ גדול מ-10MB')); return; }
+    setFile(f);
+  };
 
   const acknowledge = useAction(
     async (id) => {
@@ -197,7 +230,14 @@ function Conversation({ group, onBack, onRead }) {
                   {m.requires_ack && (
                     <div className="bubble-ack-label"><BadgeCheck size={13} /> נדרש אישור קריאה</div>
                   )}
-                  <div className="bubble-text">{m.body}</div>
+                  {m.file_name && (
+                    <button type="button" className="chat-file" onClick={() => openFile.run(m.id)} disabled={openFile.busy}
+                      title="פתיחת הקובץ">
+                      <FileText size={15} /> {m.file_name}
+                      {m.size_bytes ? <span className="tiny muted">{fmtSize(m.size_bytes)}</span> : null}
+                    </button>
+                  )}
+                  {m.body && <div className="bubble-text">{m.body}</div>}
                   <div className="bubble-time">{fmtTime(m.created_at)}</div>
                   {m.requires_ack && (mine || role === 'manager' ? (
                     <button type="button" className="bubble-ack-status" onClick={() => setAckListFor(m)}>
@@ -230,7 +270,18 @@ function Conversation({ group, onBack, onRead }) {
           <BadgeCheck size={15} /> ההודעה תישלח עם בקשת אישור קריאה מכל חברי הקבוצה
         </div>
       )}
+      {file && (
+        <div className="chat-ack-note">
+          <Paperclip size={15} /> {file.name} <span className="tiny muted">{fmtSize(file.size)}</span>
+          <button type="button" className="btn btn-icon btn-sm" onClick={() => setFile(null)} aria-label="הסרת הקובץ"><X size={14} /></button>
+        </div>
+      )}
       <form className="chat-compose" onSubmit={(e) => { e.preventDefault(); send.run(); }}>
+        <input ref={fileInput} type="file" hidden onChange={pickFile} />
+        <button type="button" className="btn btn-icon" onClick={() => fileInput.current?.click()}
+          aria-label="צירוף קובץ" title="צירוף קובץ (עד 10MB)" disabled={send.busy}>
+          <Paperclip size={18} />
+        </button>
         {canRequestAck && (
           <button
             type="button"
@@ -254,7 +305,7 @@ function Conversation({ group, onBack, onRead }) {
           placeholder="הודעה"
           aria-label="כתיבת הודעה"
         />
-        <button type="submit" className="btn btn-primary btn-icon" disabled={!text.trim() || send.busy} aria-label="שליחה">
+        <button type="submit" className="btn btn-primary btn-icon" disabled={(!text.trim() && !file) || send.busy} aria-label="שליחה">
           <Send size={17} />
         </button>
       </form>
@@ -267,6 +318,8 @@ function Conversation({ group, onBack, onRead }) {
 }
 
 /** מי אישר את קריאת ההודעה ומי עוד לא */
+const fmtSize = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`);
+
 function AckList({ groupId, message, onClose }) {
   const list = useApi(`/api/chat/groups/${groupId}/messages/${message.id}/acks`);
   const members = list.data?.members ?? [];

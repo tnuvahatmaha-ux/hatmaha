@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext.jsx';
 import { usePermissions } from '../context/PermissionsContext.jsx';
 import { ViewHead, Avatar } from '../components/layout/AppLayout.jsx';
 import { Panel, StateView, Tag, Field, Notice } from '../components/ui/index.jsx';
+import { PushToggle } from '../components/PushToggle.jsx';
 import { fmtDateFull, ROLE_NAMES, STATUS_NAMES, statusTone } from '../lib/format.js';
 
 /**
@@ -144,6 +145,10 @@ export default function Profile() {
                 </div>
               )}
             </dl>
+          </Panel>
+
+          <Panel title="התראות לטלפון" subtitle="הודעות, שינויים בלו״ז והחלטות — ישר לטלפון">
+            <PushToggle />
           </Panel>
 
           <Panel title="התראות" subtitle="איפה לקבל כל סוג התראה" flush>

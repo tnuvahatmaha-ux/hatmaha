@@ -29,6 +29,10 @@ const SELF_SCOPED = new Set([
   'GET /updates/:id/attachments/:attId/url', // נמען או שולח בלבד — נבדק ב-service
   'POST /updates/:id/read',
   'POST /updates/:id/ack',
+  'GET /push/key',
+  'POST /push/subscribe',
+  'DELETE /push/subscribe',
+  'POST /push/test',
 ]);
 
 /** קטלוגים לקריאה בלבד שממלאים טפסים של כל התפקידים — אינם מידע רגיש. */

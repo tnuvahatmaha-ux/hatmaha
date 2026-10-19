@@ -609,6 +609,7 @@ function TrainingBoard({ sites, onEdit }) {
   const [siteId, setSiteId] = useState('');
   const [weekStart, setWeekStart] = useState(weekStartOf(today()));
   const [cell, setCell] = useState(null);
+  const [layout, setLayout] = useState('people');
 
   useEffect(() => {
     if (!siteId && sites.length) setSiteId(sites[0].id);
@@ -670,9 +671,17 @@ function TrainingBoard({ sites, onEdit }) {
   return (
     <Panel
       title="לו״ז שבועי"
-      subtitle="מי מהמטמיעים נוכח באיזו פעילות, בכל יום. לחיצה על תא — שיוך לפעילות קיימת או פעילות חדשה"
+      subtitle={layout === 'people'
+        ? 'מי מהמטמיעים נוכח באיזו פעילות, בכל יום. לחיצה על תא — שיוך לפעילות קיימת או פעילות חדשה'
+        : 'לכל פעילות בשבוע — מי שובץ אליה'}
       actions={
         <>
+          <Segmented
+            label="תצוגת הלו״ז"
+            value={layout}
+            onChange={setLayout}
+            options={[{ value: 'people', label: 'לפי מטמיע' }, { value: 'activity', label: 'לפי פעילות' }]}
+          />
           <select value={siteId} onChange={(e) => setSiteId(e.target.value)} aria-label="בחירת אתר" style={{ width: 'auto', minWidth: 160 }}>
             {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
@@ -689,7 +698,8 @@ function TrainingBoard({ sites, onEdit }) {
       <StateView loading={board.loading && !data} error={board.error} onRetry={board.reload}
         empty={data && data.people.length === 0}
         emptyProps={{ icon: '👥', title: 'אין מטמיעים משויכים לאתר בשבוע הזה' }}>
-        {data && (
+        {data && layout === 'activity' && <ByActivity data={data} onEdit={onEdit} />}
+        {data && layout === 'people' && (
           <div className="roster-wrap" style={{ padding: '0 var(--space-3) var(--space-3)' }}>
             <div className="roster-grid"
               style={{ gridTemplateColumns: `minmax(130px, auto) repeat(${data.days.length}, minmax(140px, 1fr))` }}>
@@ -762,6 +772,48 @@ function TrainingBoard({ sites, onEdit }) {
         />
       )}
     </Panel>
+  );
+}
+
+/** שיבוץ לפי פעילות: כל פעילות בשבוע, ומי שובץ אליה */
+function ByActivity({ data, onEdit }) {
+  const days = data.days.filter((d) => data.activities.some((a) => a.activity_date === d));
+  if (days.length === 0) return <Empty icon="🗓️" title="אין פעילויות בשבוע הזה" />;
+  return (
+    <div className="table-wrap">
+      <table className="table table-cards">
+        <thead>
+          <tr><th>יום</th><th>שעות</th><th>פעילות</th><th>מעביר/ה</th><th>משובצים</th><th /></tr>
+        </thead>
+        <tbody>
+          {days.flatMap((d) => data.activities.filter((a) => a.activity_date === d).map((a) => {
+            const team = a.participants.filter((p) => !['mentor', 'manager'].includes(p.role));
+            const escorts = a.participants.filter((p) => ['mentor', 'manager'].includes(p.role));
+            return (
+              <tr key={a.id}>
+                <td data-label="יום" className="nowrap">{dayName(d)} <span className="tnum small muted">{fmtDate(d)}</span></td>
+                <td data-label="שעות" className="tnum nowrap">{fmtClock(a.start_time)}–{fmtClock(a.end_time)}</td>
+                <td data-label="פעילות">
+                  <span className="bold">{a.title || a.type_name}</span>
+                  <div className="tiny muted">{[a.type_name, a.location_name, a.domain_name].filter(Boolean).join(' · ')}</div>
+                </td>
+                <td data-label="מעביר/ה" className="small">
+                  {a.owner_name ?? '—'}
+                  {escorts.length > 0 && <div className="tiny muted">מלווים: {escorts.map((p) => p.name).join(', ')}</div>}
+                </td>
+                <td data-label="משובצים">
+                  <div className="small bold">{team.length}</div>
+                  <div className="row" style={{ gap: 4 }}>
+                    {team.map((p) => <Tag key={p.id}>{p.name}</Tag>)}
+                  </div>
+                </td>
+                <td><button type="button" className="btn btn-sm" onClick={() => onEdit(a)}>עריכה</button></td>
+              </tr>
+            );
+          }))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

@@ -567,6 +567,18 @@ export async function mentors(filters = {}) {
               where ma.mentor_user_id = p.id and ma.deleted_at is null
                 and ma.span @> current_date) as implementer_count,
             coalesce((select json_agg(json_build_object(
+                'id', ip.id, 'name', ip.full_name, 'isPrimary', ma.is_primary,
+                'domains', (select string_agg(d.name, ', ' order by d.name) from user_domains ud
+                              join domains d on d.id = ud.domain_id
+                             where ud.user_id = ip.id and ud.deleted_at is null),
+                'sites', (select string_agg(s.name, ', ' order by s.name) from site_assignments sa
+                            join sites s on s.id = sa.site_id
+                           where sa.user_id = ip.id and sa.deleted_at is null and sa.span @> current_date))
+                order by ma.is_primary desc, ip.full_name)
+              from mentor_assignments ma join profiles ip on ip.id = ma.implementer_user_id
+             where ma.mentor_user_id = p.id and ma.deleted_at is null and ma.span @> current_date
+               and ip.deleted_at is null), '[]') as implementers,
+            coalesce((select json_agg(json_build_object(
                 'id', r.id, 'siteId', r.site_id, 'siteName', s.name,
                 'domainId', r.domain_id, 'domainName', d.name,
                 'subCategoryId', r.sub_category_id, 'subCategoryName', sc.name,

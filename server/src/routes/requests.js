@@ -8,6 +8,7 @@ import { setETag } from '../lib/etag.js';
 import { uuid, dateStr, timeStr, idParam } from '../schemas/common.schema.js';
 import * as svc from '../services/requests.service.js';
 import { query } from '../lib/db.js';
+import { decide } from '../permissions/engine.js';
 import { rejectManagerSelfSubmission } from '../middleware/rejectManagerSelfSubmission.js';
 
 export const requestsRouter = Router();
@@ -41,7 +42,8 @@ requestsRouter.get(
   requirePermission('requests', 'view'),
   validate({
     query: z.object({
-      status: z.enum(['draft', 'submitted', 'approved', 'rejected', 'cancelled']).optional(),
+      // סטטוס אחד, או כמה מופרדים בפסיק (approved,rejected)
+      status: z.string().regex(/^(draft|submitted|approved|rejected|cancelled)(,(draft|submitted|approved|rejected|cancelled))*$/).optional(),
       userId: uuid.optional(),
       siteId: uuid.optional(),
       from: dateStr.optional(),
@@ -119,6 +121,39 @@ requestsRouter.post(
     }));
     res.status(result.status).json(result.body);
   },
+);
+
+requestsRouter.patch(
+  '/:id',
+  requirePermission('requests', 'view', targetScope),
+  validate({
+    params: idParam,
+    body: z.object({
+      constraintTypeId: uuid.optional(),
+      constraintDate: dateStr.optional(),
+      startTime: timeStr.optional(),
+      endTime: timeStr.optional(),
+      note: z.string().trim().max(1000).nullish(),
+    }),
+  }),
+  async (req, res) => {
+    const canApprove = decide(req.user, 'requests', 'approve', req.permissionCtx).allowed;
+    res.json({ request: await svc.update(req.user, req.params.id, req.body, { canApprove }) });
+  },
+);
+
+requestsRouter.post(
+  '/:id/return',
+  requirePermission('requests', 'approve', targetScope),
+  validate({ params: idParam, body: z.object({ note: z.string().trim().min(2, 'יש לכתוב מה לתקן').max(1000) }) }),
+  async (req, res) => res.json({ request: await svc.returnForFix(req.user, req.params.id, req.body) }),
+);
+
+requestsRouter.post(
+  '/:id/revoke',
+  requirePermission('requests', 'approve', targetScope),
+  validate({ params: idParam, body: z.object({ note: z.string().trim().max(1000).optional() }) }),
+  async (req, res) => res.json(await svc.revoke(req.user, req.params.id, req.body)),
 );
 
 requestsRouter.post(

@@ -3,7 +3,7 @@ import {
   Puzzle, Rocket, CalendarDays, KeyRound, Mail, FileText, User, Moon, Check, OctagonX, Hourglass,
   X, Inbox, WifiOff, Home, LayoutDashboard, Calendar, Users, GraduationCap, ClipboardList,
   CheckCircle2, BookOpen, LayoutGrid, Hospital, UserCog, BarChart3, Bell, Settings, MessageSquare,
-  Sparkles, Gauge,
+  Sparkles, Gauge, ListChecks,
 } from 'lucide-react';
 
 /**
@@ -44,6 +44,7 @@ export const NAV_ICONS = {
   '/implementers': UserCog,
   '/messages': MessageSquare,
   '/skills': Gauge,
+  '/training': ListChecks,
   '/reports': BarChart3,
   '/notifications': Bell,
   '/settings': Settings,

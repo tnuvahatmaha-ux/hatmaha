@@ -915,3 +915,88 @@ button.roster-hours:hover { background: var(--fill-strong); }
 .score-pill.low { background: var(--danger-bg); color: var(--danger); }
 .score-pill.mid { background: var(--warn-bg); color: var(--warn); }
 .score-pill.high { background: var(--success-bg); color: var(--success); }
+
+/* ───────────── סבב 4 ───────────── */
+
+/* עמודת השמות קפואה בגלילה אופקית (בעברית — הצד הימני) */
+.roster-loc, .roster-corner {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 2;
+}
+.roster-corner { background: var(--surface); align-self: stretch; }
+.roster-loc { align-self: stretch; outline: 4px solid var(--surface); }
+.roster-loc { box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.18); }
+.roster-leads-head { background: var(--primary-bg, var(--surface-2)); color: var(--primary); }
+.roster-leads { display: flex; flex-direction: column; gap: 4px; }
+
+/* כפתור כניסה / יציאה במסך הבית */
+.attendance-btn {
+  width: 100%;
+  min-height: 56px;
+  font-size: 18px;
+  font-weight: 700;
+  border-radius: var(--radius-lg);
+}
+
+/* פס התקדמות */
+.progress {
+  display: inline-block;
+  vertical-align: middle;
+  width: 100px; height: 8px;
+  margin-inline-end: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.progress-fill { height: 100%; background: var(--primary); border-radius: 999px; }
+
+/* גאנט הכשרה */
+.gantt { overflow-x: auto; }
+.gantt-grid { display: grid; min-width: max-content; }
+.gantt-head, .gantt-label, .gantt-track { border-block-end: 1px solid var(--line-soft); }
+.gantt-head {
+  font-size: 11px; color: var(--muted); padding: 6px 0; text-align: center;
+  border-inline-start: 1px solid var(--line-soft);
+}
+.gantt-label {
+  position: sticky; inset-inline-start: 0; z-index: 2;
+  background: var(--surface);
+  padding: 8px 10px; font-size: 13px;
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  min-width: 190px; max-width: 260px;
+  box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.18);
+}
+.gantt-person { background: var(--surface-2); font-weight: 700; }
+.gantt-track { position: relative; min-height: 40px; }
+.gantt-today {
+  position: absolute; inset-block: 0; width: 2px;
+  background: var(--danger); opacity: 0.55; z-index: 1;
+}
+.gantt-bar {
+  position: absolute; inset-block: 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  cursor: pointer;
+  font: inherit; padding: 0; color: inherit;
+}
+.gantt-bar-fill { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--primary); opacity: 0.85; }
+.gantt-bar-text {
+  position: relative; z-index: 1;
+  display: block; padding: 3px 8px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  text-shadow: 0 0 3px var(--surface);
+}
+.gantt-bar.is-done .gantt-bar-fill { background: var(--success); }
+.gantt-bar.is-behind { border-color: var(--warn); }
+.gantt-bar.has-pending { outline: 2px dashed var(--warn); outline-offset: 1px; }
+
+/* קובץ בצ׳אט */
+.chat-file {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  background: var(--surface-2); font-size: 13px;
+  border: none; cursor: pointer; color: inherit; font: inherit;
+}

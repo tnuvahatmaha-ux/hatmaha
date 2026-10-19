@@ -3,9 +3,15 @@ import { useApi } from '../lib/useApi.js';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
 import { Panel, StateView, Tag, Segmented, WeekNav, Empty, Notice } from '../components/ui/index.jsx';
 import { fmtDate, fmtTime, fmtWeekRange, dayName, today, addDays, weekStartOf, weekDays } from '../lib/format.js';
+import { usePermissions } from '../context/PermissionsContext.jsx';
+import { ActivityDetailDialog } from '../components/ActivityDetail.jsx';
+import { PersonReport } from '../components/PersonReport.jsx';
 
 /** הלו״ז האישי. חפיפות מסומנות, כפי ש-§7 דורש. */
 export default function MySchedule() {
+  const { profile } = usePermissions();
+  const [view, setView] = useState('schedule');
+  const [openActivity, setOpenActivity] = useState(null);
   const [mode, setMode] = useState('week');
   const [anchor, setAnchor] = useState(today());
 
@@ -22,9 +28,16 @@ export default function MySchedule() {
     <>
       <ViewHead
         title="הלו״ז שלי"
-        subtitle="שיבוצים, פעילויות ואילוצים — מגרסאות הסידור שפורסמו בלבד"
+        subtitle={view === 'hours' ? 'שעות עבודה, נוכחות וחופשים — לפי שבוע וחודש' : 'שיבוצים, פעילויות ואילוצים — מגרסאות הסידור שפורסמו בלבד'}
         actions={
           <>
+            <Segmented
+              label="מסך"
+              value={view}
+              onChange={setView}
+              options={[{ value: 'schedule', label: 'לו״ז' }, { value: 'hours', label: 'דוח שעות' }]}
+            />
+            {view === 'schedule' && (<>
             <Segmented
               label="תצוגה"
               value={mode}
@@ -37,9 +50,12 @@ export default function MySchedule() {
               onNext={() => setAnchor(addDays(anchor, mode === 'week' ? 7 : 1))}
               onToday={() => setAnchor(today())}
             />
+            </>)}
           </>
         }
       />
+
+      {view === 'hours' ? <PersonReport userId={profile?.id} self /> : (<>
 
       {overlaps.length > 0 && (
         <Notice tone="danger" icon="⚠" title="יש חפיפות בלו״ז שלך">
@@ -67,7 +83,12 @@ export default function MySchedule() {
                   {dayItems.map((item) => (
                     <li
                       key={`${item.kind}-${item.id}`}
+                      onClick={item.kind === 'activity' ? () => setOpenActivity(item.id) : undefined}
+                      onKeyDown={item.kind === 'activity' ? (e) => { if (e.key === 'Enter') setOpenActivity(item.id); } : undefined}
+                      tabIndex={item.kind === 'activity' ? 0 : undefined}
+                      role={item.kind === 'activity' ? 'button' : undefined}
                       style={{
+                        cursor: item.kind === 'activity' ? 'pointer' : undefined,
                         display: 'flex', gap: 'var(--space-3)', alignItems: 'center',
                         padding: 'var(--space-3) var(--space-4)',
                         borderBlockEnd: '1px solid var(--line-soft)',
@@ -91,6 +112,7 @@ export default function MySchedule() {
                       </div>
                       {item.overlap && <Tag tone="danger">חפיפה</Tag>}
                       {item.as_instructor && <Tag tone="accent">מעביר/ה</Tag>}
+                      {item.kind === 'activity' && <span className="tiny muted" aria-hidden="true">פירוט ›</span>}
                       <Tag tone={{ shift: 'accent', activity: '', constraint: 'warn' }[item.kind]}>
                         {{ shift: 'משמרת', activity: 'פעילות', constraint: 'אילוץ' }[item.kind]}
                       </Tag>
@@ -102,6 +124,9 @@ export default function MySchedule() {
           );
         })}
       </StateView>
+      </>)}
+
+      {openActivity && <ActivityDetailDialog activityId={openActivity} onClose={() => setOpenActivity(null)} />}
     </>
   );
 }

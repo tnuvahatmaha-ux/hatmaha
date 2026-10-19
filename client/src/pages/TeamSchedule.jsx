@@ -155,7 +155,7 @@ export default function TeamSchedule() {
           </Notice>
         )}
         {showMatrix ? (
-          <TeamMatrix days={days} entries={entries} />
+          <TeamMatrix days={days} entries={entries} leads={schedule.data?.leads ?? []} />
         ) : byDay.map(({ day, items }) => (
           <Panel key={day} title={`${dayName(day)} · ${fmtDate(day)}`} flush>
             {items.length === 0 ? (
@@ -190,7 +190,7 @@ export default function TeamSchedule() {
 }
 
 /** מטריצה: שורה לכל אדם, עמודה לכל יום, ובכל תא מה שיש לו באותו יום */
-function TeamMatrix({ days, entries }) {
+function TeamMatrix({ days, entries, leads }) {
   const people = [];
   const seen = new Set();
   for (const e of entries) {
@@ -212,6 +212,25 @@ function TeamMatrix({ days, entries }) {
               <small className="tnum">{fmtDate(d)}</small>
             </div>
           ))}
+
+          {leads.length > 0 && (
+            <>
+              <div className="roster-loc roster-leads-head" title="המדריכים שמלווים את הצוות — לפי תחום">מלווים</div>
+              {days.map((d) => {
+                const dayLeads = leads.filter((l) => l.date === d);
+                return (
+                  <div key={d} className="roster-slot board-cell roster-leads">
+                    {dayLeads.map((l) => (
+                      <span key={`${l.personId}-${l.domain}`} className="roster-chip board-chip">
+                        <span className="tiny muted">{l.domain}</span>
+                        <span>{l.name}</span>
+                      </span>
+                    ))}
+                  </div>
+                );
+              })}
+            </>
+          )}
 
           {people.map((person) => (
             <TeamMatrixRow key={person.id} person={person} days={days} entries={entries} />

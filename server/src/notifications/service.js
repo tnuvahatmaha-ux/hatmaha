@@ -1,4 +1,5 @@
 import { logger } from '../lib/logger.js';
+import { sendPush, urlFor } from './push.js';
 
 /**
  * יצירת התראות.
@@ -95,6 +96,18 @@ export async function notify(tx, args) {
      returning id, recipient_user_id, channel, delivery_status`,
     params,
   );
+
+  // Push לטלפון — לכל מי שקיבל עכשיו התראה במערכת, ורק אחרי שהפעולה נשמרה
+  const pushTo = [...new Set(inserted.filter((r) => r.channel === 'inapp').map((r) => r.recipient_user_id))];
+  if (pushTo.length && tx.afterCommit) {
+    const message = {
+      title: args.title,
+      body: args.body,
+      url: args.payload?.url ?? urlFor(args.entityType, args.typeCode),
+      tag: args.entityId ? `${args.typeCode}:${args.entityId}` : args.typeCode,
+    };
+    tx.afterCommit(() => sendPush(pushTo, message));
+  }
 
   return inserted;
 }

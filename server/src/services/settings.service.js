@@ -266,7 +266,11 @@ export async function saveProfile(actor, locationTypeId, period, input) {
 /* ───────────────────────── הגדרות כלליות ───────────────────────── */
 
 export async function appSettings() {
-  const rows = await query('select key, value, name_he, description_he from app_settings order by key');
+  // מפתחות פנימיים (כמו מפתח ה-Push הפרטי) אינם הגדרה שמוצגת או נערכת במסך
+  const rows = await query(
+    `select key, value, name_he, description_he from app_settings
+      where key not like 'internal.%' order by key`,
+  );
   return Object.fromEntries(rows.map((r) => [r.key, r]));
 }
 
@@ -274,7 +278,7 @@ export async function setAppSetting(actor, key, value) {
   return withTransaction({ actorId: actor.userId }, async (tx) => {
     const [row] = await tx.query(
       `update app_settings set value = $2, updated_at = now(), updated_by = $3
-        where key = $1 returning key, value`,
+        where key = $1 and key not like 'internal.%' returning key, value`,
       [key, JSON.stringify(value), actor.userId],
     );
     if (!row) throw new AppError('E_NOT_FOUND', `הגדרה לא מוכרת: ${key}`);

@@ -1,6 +1,8 @@
 import { query, withTransaction } from '../lib/db.js';
 import { AppError } from '../lib/errors.js';
+import { randomUUID } from 'node:crypto';
 import { notify } from '../notifications/service.js';
+import { signUpload, signDownload, storageEnabled, MAX_FILE_BYTES } from '../lib/storage.js';
 
 /**
  * צ׳אט קבוצתי.
@@ -49,11 +51,11 @@ export async function listGroups(principal) {
                 and cm.author_user_id <> $1
                 and not exists (select 1 from chat_message_acks a
                                  where a.message_id = cm.id and a.user_id = $1)) as pending_ack,
-            last.body as last_body, last.created_at as last_at, last.author_name as last_author
+            coalesce(nullif(last.body, ''), '📎 ' || last.file_name) as last_body, last.created_at as last_at, last.author_name as last_author
        from chat_groups g
        join chat_group_members m on m.group_id = g.id and m.user_id = $1
        left join lateral (
-         select cm.body, cm.created_at, p.full_name as author_name
+         select cm.body, cm.file_name, cm.created_at, p.full_name as author_name
            from chat_messages cm join profiles p on p.id = cm.author_user_id
           where cm.group_id = g.id and cm.deleted_at is null
           order by cm.id desc limit 1) last on true
@@ -159,7 +161,7 @@ export async function messages(principal, groupId, { after, limit = 100 }) {
   const rows = await query(
     `select * from (
        select cm.id, cm.body, cm.created_at, cm.author_user_id, p.full_name as author_name,
-              cm.requires_ack, ${ACK_COLUMNS.replaceAll('$USER', '$4')}
+              cm.requires_ack, cm.file_name, cm.mime_type, cm.size_bytes, ${ACK_COLUMNS.replaceAll('$USER', '$4')}
          from chat_messages cm join profiles p on p.id = cm.author_user_id
         where cm.group_id = $1 and cm.deleted_at is null and ($2::bigint is null or cm.id > $2)
         order by cm.id desc limit $3) t
@@ -177,13 +179,41 @@ export async function messages(principal, groupId, { after, limit = 100 }) {
       )
     : [];
   return {
-    group: { id: group.id, name: group.name, kind: group.kind, myRole: group.my_role },
+    group: { id: group.id, name: group.name, kind: group.kind, myRole: group.my_role, storageEnabled },
     messages: rows,
     acks,
   };
 }
 
-export async function send(actor, groupId, body, { requiresAck = false } = {}) {
+const safeName = (name) => name.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(-120) || 'file';
+
+/** קישור העלאה חתום לקובץ שיצורף להודעה. הקובץ עולה ישירות ל-Storage. */
+export async function signFile(actor, groupId, { fileName, sizeBytes }) {
+  if (sizeBytes > MAX_FILE_BYTES) throw new AppError('E_VALIDATION', 'הקובץ גדול מ-10MB');
+  const group = await requireMember(query, groupId, actor.userId);
+  if (group.is_archived) throw new AppError('E_STATE', 'הקבוצה בארכיון');
+  const storagePath = `chat/${groupId}/${randomUUID()}-${safeName(fileName)}`;
+  return { storagePath, ...(await signUpload(storagePath)) };
+}
+
+/** קישור הורדה זמני — לחברי הקבוצה בלבד */
+export async function fileUrl(principal, groupId, messageId) {
+  await requireMember(query, groupId, principal.userId);
+  const [msg] = await query(
+    `select storage_path, file_name from chat_messages
+      where id = $1 and group_id = $2 and deleted_at is null and storage_path is not null`,
+    [messageId, groupId],
+  );
+  if (!msg) throw new AppError('E_NOT_FOUND', 'הקובץ המבוקש לא נמצא');
+  return { url: await signDownload(msg.storage_path, { fileName: msg.file_name }) };
+}
+
+export async function send(actor, groupId, body, { requiresAck = false, attachment = null } = {}) {
+  if (attachment && !attachment.storagePath.startsWith(`chat/${groupId}/`)) {
+    throw new AppError('E_VALIDATION', 'נתיב הקובץ אינו שייך לקבוצה הזו');
+  }
+  if (!body && !attachment) throw new AppError('E_VALIDATION', 'ההודעה ריקה');
+  const preview = body ? body.slice(0, 120) : `📎 ${attachment.fileName}`;
   if (requiresAck && actor.baseRole === 'implementer') {
     throw new AppError('E_FORBIDDEN', 'מטמיע אינו יכול לבקש אישור קריאה');
   }
@@ -192,9 +222,12 @@ export async function send(actor, groupId, body, { requiresAck = false } = {}) {
     if (group.is_archived) throw new AppError('E_STATE', 'הקבוצה בארכיון');
 
     const [row] = await tx.query(
-      `insert into chat_messages (group_id, author_user_id, body, requires_ack) values ($1, $2, $3, $4)
-       returning id, body, created_at, author_user_id, requires_ack`,
-      [groupId, actor.userId, body, requiresAck],
+      `insert into chat_messages
+         (group_id, author_user_id, body, requires_ack, file_name, mime_type, size_bytes, storage_path)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       returning id, body, created_at, author_user_id, requires_ack, file_name, mime_type, size_bytes`,
+      [groupId, actor.userId, body ?? '', requiresAck, attachment?.fileName ?? null,
+       attachment?.mimeType ?? null, attachment?.sizeBytes ?? null, attachment?.storagePath ?? null],
     );
 
     if (requiresAck) {
@@ -206,7 +239,7 @@ export async function send(actor, groupId, body, { requiresAck = false } = {}) {
         typeCode: 'chat_ack_required',
         recipientIds: members.map((m) => m.user_id),
         title: `נדרש אישור קריאה בקבוצה ${group.name}`,
-        body: `${actor.fullName}: ${body.slice(0, 120)}`,
+        body: `${actor.fullName}: ${preview}`,
         entityType: 'chat_groups',
         entityId: groupId,
       });
@@ -237,7 +270,7 @@ export async function send(actor, groupId, body, { requiresAck = false } = {}) {
       typeCode: 'chat_message',
       recipientIds: others.map((o) => o.user_id),
       title: `הודעה חדשה בקבוצה ${group.name}`,
-      body: `${actor.fullName}: ${body.slice(0, 120)}`,
+      body: `${actor.fullName}: ${preview}`,
       entityType: 'chat_groups',
       entityId: groupId,
     });

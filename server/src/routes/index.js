@@ -18,6 +18,9 @@ import { auditRouter } from './audit.js';
 import { updatesRouter } from './updates.js';
 import { chatRouter } from './chat.js';
 import { skillsRouter } from './skills.js';
+import { attendanceRouter } from './attendance.js';
+import { pushRouter } from './push.js';
+import { trainingRouter } from './training.js';
 
 /**
  * טבלת ההרכבה, כדאטה.
@@ -48,6 +51,9 @@ export const API_ROUTES = [
   ['/updates', updatesRouter],
   ['/chat', chatRouter],
   ['/skills', skillsRouter],
+  ['/attendance', attendanceRouter],
+  ['/push', pushRouter],
+  ['/training', trainingRouter],
   ['/audit', auditRouter],
 ];
 

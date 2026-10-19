@@ -96,6 +96,81 @@ scheduleRouter.get(
 );
 
 /**
+ * פירוט פעילות מהלו״ז האישי: מה, איפה, מי מעביר, מי המלווים ומי עוד משובץ.
+ * פתוח למי שמשתתף בפעילות או מעביר אותה, ולמי שרשאי לראות את הפעילויות באתר.
+ */
+scheduleRouter.get(
+  '/me/activity/:id',
+  requirePermission('roster', 'view', (req) => ({ targetUserId: req.user.userId })),
+  validate({ params: z.object({ id: uuid }) }),
+  async (req, res) => {
+    const { AppError } = await import('../lib/errors.js');
+    const [activity] = await query(
+      `select a.id, a.site_id, a.title, a.description, a.notes, a.activity_date, a.starts_at, a.ends_at,
+              a.status, a.visibility::text as visibility, a.owner_user_id,
+              at.name_he as type_name, s.name as site_name, l.name as location_name,
+              d.name as domain_name, sc.name as sub_category_name,
+              owner.full_name as owner_name, owner.phone as owner_phone,
+              exists (select 1 from activity_participants ap
+                       where ap.activity_id = a.id and ap.user_id = $2) as is_participant
+         from activities a
+         join activity_types at on at.id = a.activity_type_id
+         join sites s on s.id = a.site_id
+         left join locations l on l.id = a.location_id
+         left join domains d on d.id = a.domain_id
+         left join sub_categories sc on sc.id = a.sub_category_id
+         left join profiles owner on owner.id = a.owner_user_id
+        where a.id = $1 and a.deleted_at is null`,
+      [req.params.id, req.user.userId],
+    );
+    if (!activity) throw new AppError('E_NOT_FOUND', 'הפעילות המבוקשת לא נמצאה');
+
+    const mine = activity.is_participant || activity.owner_user_id === req.user.userId;
+    if (!mine) {
+      const { decide } = await import('../permissions/engine.js');
+      if (!decide(req.user, 'activities', 'view', { siteId: activity.site_id }).allowed
+          || (activity.visibility === 'managers_only' && req.user.baseRole !== 'manager')) {
+        throw new AppError('E_NOT_FOUND', 'הפעילות המבוקשת לא נמצאה');
+      }
+    }
+
+    const participants = await query(
+      `select p.id, p.full_name, p.base_role::text as base_role, ap.attendance
+         from activity_participants ap join profiles p on p.id = ap.user_id
+        where ap.activity_id = $1 and p.deleted_at is null
+        order by p.base_role in ('mentor', 'manager') desc, p.full_name`,
+      [req.params.id],
+    );
+    // מלווים: מדריכים שמשתתפים בפעילות, והמדריכים (ראשי ותומכים) של המשתתפים
+    const mentors = await query(
+      `select distinct p.id, p.full_name, bool_or(ma.is_primary) as is_primary
+         from mentor_assignments ma join profiles p on p.id = ma.mentor_user_id
+        where ma.implementer_user_id = any($1::uuid[]) and ma.deleted_at is null
+          and ma.span @> current_date and p.deleted_at is null and p.id <> coalesce($2, '00000000-0000-0000-0000-000000000000'::uuid)
+        group by p.id, p.full_name
+        order by p.full_name`,
+      [participants.filter((p) => !['mentor', 'manager'].includes(p.base_role)).map((p) => p.id), activity.owner_user_id],
+    );
+    const leadingMentors = participants.filter((p) => p.base_role === 'mentor' && p.id !== activity.owner_user_id);
+    const team = participants.filter((p) => !['mentor', 'manager'].includes(p.base_role));
+    const materials = await query(
+      'select id, title, url, note from activity_materials where activity_id = $1', [req.params.id],
+    );
+
+    res.json({
+      activity,
+      team,
+      mentors: [
+        ...leadingMentors.map((m) => ({ id: m.id, full_name: m.full_name, role: 'משתתף כמלווה' })),
+        ...mentors.filter((m) => !leadingMentors.some((l) => l.id === m.id))
+          .map((m) => ({ id: m.id, full_name: m.full_name, role: m.is_primary ? 'מדריך ראשי' : 'מדריך תומך' })),
+      ],
+      materials,
+    });
+  },
+);
+
+/**
  * לו״ז צוותי.
  *
  * קורא מ-v_team_schedule, שבו מזעור המידע נאכף במקום אחד: אין סיבות
@@ -125,16 +200,44 @@ async function loadTeam(req, q) {
   );
   const allowed = new Set(setting?.value ?? ['name', 'activity', 'site', 'status']);
 
+  // מדריכים ומנהלים אינם חלק מהצוות שמשובץ — הם מלווים, ומוצגים בנפרד (leads)
   const rows = await query(
-    `select entry_date::text as entry_date, user_id, person_name, activity_name, location_name,
-            site_id, domain_name, starts_at, ends_at, status_he, kind
-       from v_team_schedule
-      where site_id = $1 and entry_date between $2::date and $3::date
+    `select v.entry_date::text as entry_date, v.user_id, v.person_name, v.activity_name, v.location_name,
+            v.site_id, v.domain_name, v.starts_at, v.ends_at, v.status_he, v.kind
+       from v_team_schedule v
+       join profiles p on p.id = v.user_id
+      where v.site_id = $1 and v.entry_date between $2::date and $3::date
         and $3::date - $2::date <= 31
-        and ($4::uuid is null or domain_id = $4)
-        and (not $5 or user_id = any($6::uuid[]))
-      order by entry_date, starts_at, person_name`,
+        and ($4::uuid is null or v.domain_id = $4)
+        and (not $5 or v.user_id = any($6::uuid[]))
+        and p.base_role in ('implementer', 'lead')
+      order by v.entry_date, v.starts_at, v.person_name`,
     [siteId, from, to, domainId ?? null, mine, req.user.scopes.assignedUserIds],
+  );
+
+  // מלווים לפי יום ותחום: מי שמעביר פעילויות באתר באותו יום, ומדריכים שמשתתפים בהן
+  const leadRows = !allowed.has('name') ? [] : await query(
+    `select distinct a.activity_date::text as date, p.id as person_id, p.full_name as name,
+            coalesce(d.name, 'כללי') as domain
+       from activities a
+       join profiles p on p.id = a.owner_user_id
+       left join domains d on d.id = a.domain_id
+      where a.site_id = $1 and a.activity_date between $2::date and $3::date
+        and a.deleted_at is null and a.status in ('scheduled', 'completed')
+        and a.visibility = 'participants'
+        and ($4::uuid is null or a.domain_id = $4)
+     union
+     select a.activity_date::text, p.id, p.full_name, coalesce(d.name, 'כללי')
+       from activities a
+       join activity_participants ap on ap.activity_id = a.id
+       join profiles p on p.id = ap.user_id and p.base_role in ('mentor', 'manager')
+       left join domains d on d.id = a.domain_id
+      where a.site_id = $1 and a.activity_date between $2::date and $3::date
+        and a.deleted_at is null and a.status in ('scheduled', 'completed')
+        and a.visibility = 'participants'
+        and ($4::uuid is null or a.domain_id = $4)
+     order by 1, 4, 3`,
+    [siteId, from, to, domainId ?? null],
   );
 
   // רק השדות שהותרו יוצאים מהשרת — הסתרה בלקוח אינה מזעור מידע.
@@ -152,7 +255,8 @@ async function loadTeam(req, q) {
     kind: r.kind,
   }));
 
-  return { from, to, fields: [...allowed], entries };
+  const leads = leadRows.map((r) => ({ date: r.date, personId: r.person_id, name: r.name, domain: r.domain }));
+  return { from, to, fields: [...allowed], entries, leads };
 }
 
 /**
@@ -188,7 +292,7 @@ scheduleRouter.get(
   requirePermission('teamSchedule', 'view', (req) => ({ siteId: req.query.siteId })),
   validate({ query: teamQuery.and(z.object({ layout: z.enum(['matrix', 'list']).default('list') })) }),
   async (req, res) => {
-    const { from, to, fields, entries } = await loadTeam(req, req.validQuery);
+    const { from, to, fields, entries, leads } = await loadTeam(req, req.validQuery);
     const layout = fields.includes('name') ? req.validQuery.layout : 'list';
 
     let rows;
@@ -200,7 +304,14 @@ scheduleRouter.get(
       const dayLabel = (iso) => `${DAY_NAMES[new Date(`${iso}T12:00:00Z`).getUTCDay()]} ${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
       const people = new Map();
       for (const e of entries) if (!people.has(e.personId)) people.set(e.personId, e.name);
-      rows = [...people.entries()]
+      const leadRow = leads.length ? [{
+        שם: 'מלווים',
+        ...Object.fromEntries(days.map((d) => [
+          dayLabel(d),
+          leads.filter((l) => l.date === d).map((l) => `${l.domain}: ${l.name}`).join('\n'),
+        ])),
+      }] : [];
+      rows = [...leadRow, ...[...people.entries()]
         .sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'he'))
         .map(([personId, name]) => ({
           שם: name,
@@ -208,7 +319,7 @@ scheduleRouter.get(
             dayLabel(d),
             entries.filter((e) => e.personId === personId && e.date === d).map(cellText).join('\n'),
           ])),
-        }));
+        }))];
     } else {
       const keys = Object.keys(LIST_LABELS).filter(
         (k) => fields.includes(k) || (k === 'location' && fields.includes('site')),

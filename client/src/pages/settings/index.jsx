@@ -8,6 +8,7 @@ import CatalogsTab from './CatalogsTab.jsx';
 import LocationTypesTab from './LocationTypesTab.jsx';
 import RulesTab from './RulesTab.jsx';
 import MentorsTab from './MentorsTab.jsx';
+import TrainingTracksTab from './TrainingTracksTab.jsx';
 import PermissionsTab from './PermissionsTab.jsx';
 import AuditTab from './AuditTab.jsx';
 import SystemTab from './SystemTab.jsx';
@@ -24,6 +25,7 @@ const TABS = [
   { id: 'locationTypes', label: 'מאגר מיקומים', need: ['settings', 'view'], Component: LocationTypesTab },
   { id: 'rules', label: 'חוקיות', need: ['rules', 'view'], Component: RulesTab },
   { id: 'mentors', label: 'ניהול מדריכים', need: ['mentors', 'view'], Component: MentorsTab },
+  { id: 'training', label: 'תבניות הכשרה', need: ['settings', 'edit'], Component: TrainingTracksTab },
   { id: 'permissions', label: 'הרשאות', need: ['permissions', 'view'], Component: PermissionsTab, managerOnly: true },
   { id: 'audit', label: 'יומן ביקורת', need: ['audit', 'view'], Component: AuditTab },
   { id: 'system', label: 'מערכת', need: ['settings', 'manage'], Component: SystemTab },

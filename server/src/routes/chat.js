@@ -80,12 +80,42 @@ chatRouter.post(
   requirePermission('chat', 'create'),
   validate({
     params: idParam,
-    body: z.object({ body: z.string().trim().min(1).max(4000), requiresAck: z.boolean().default(false) }),
+    body: z
+      .object({
+        body: z.string().trim().max(4000).default(''),
+        requiresAck: z.boolean().default(false),
+        attachment: z
+          .object({
+            storagePath: z.string().min(1).max(500),
+            fileName: z.string().trim().min(1).max(200),
+            mimeType: z.string().max(200).nullish(),
+            sizeBytes: z.number().int().min(0).max(10 * 1024 * 1024),
+          })
+          .nullish(),
+      })
+      .refine((v) => v.body.length > 0 || v.attachment, { message: 'ההודעה ריקה', path: ['body'] }),
   }),
   async (req, res) =>
     res.status(201).json({
-      message: await svc.send(req.user, req.params.id, req.body.body, { requiresAck: req.body.requiresAck }),
+      message: await svc.send(req.user, req.params.id, req.body.body, {
+        requiresAck: req.body.requiresAck,
+        attachment: req.body.attachment ?? null,
+      }),
     }),
+);
+
+/** קובץ בצ׳אט: קישור העלאה חתום, והורדה זמנית לחברי הקבוצה */
+chatRouter.post(
+  '/groups/:id/files/sign',
+  requirePermission('chat', 'create'),
+  validate({
+    params: idParam,
+    body: z.object({
+      fileName: z.string().trim().min(1).max(200),
+      sizeBytes: z.number().int().min(1).max(10 * 1024 * 1024, 'הקובץ גדול מ-10MB'),
+    }),
+  }),
+  async (req, res) => res.json(await svc.signFile(req.user, req.params.id, req.body)),
 );
 
 const messageParams = z.object({ id: uuid, messageId: z.coerce.number().int().positive() });
@@ -96,6 +126,13 @@ chatRouter.post(
   validate({ params: messageParams }),
   async (req, res) =>
     res.json({ message: await svc.acknowledge(req.user, req.params.id, req.params.messageId) }),
+);
+
+chatRouter.get(
+  '/groups/:id/messages/:messageId/file',
+  requirePermission('chat', 'view'),
+  validate({ params: messageParams }),
+  async (req, res) => res.json(await svc.fileUrl(req.user, req.params.id, req.params.messageId)),
 );
 
 chatRouter.get(

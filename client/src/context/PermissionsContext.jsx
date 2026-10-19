@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { get, post } from '../lib/api.js';
 import { useAuth } from './AuthContext.jsx';
+import { syncPush } from '../lib/push.js';
 
 const PermissionsContext = createContext(null);
 
@@ -28,6 +29,8 @@ export function PermissionsProvider({ children }) {
         get('/api/auth/effective-permissions'),
       ]);
       setState({ loading: false, error: null, me, capabilities: perms.capabilities ?? {} });
+      // המכשיר הזה כבר אישר התראות? מוודאים שהמנוי רשום על המשתמש הנוכחי
+      syncPush().catch(() => {});
     } catch (error) {
       setState({ loading: false, error, me: null, capabilities: {} });
     }

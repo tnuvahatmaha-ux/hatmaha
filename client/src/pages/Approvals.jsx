@@ -4,7 +4,9 @@ import { get, post, newIdempotencyKey } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
 import { Panel, StateView, Tag, Notice, Field, Modal, Segmented, Empty } from '../components/ui/index.jsx';
+import { RequestManageDialog } from '../components/RequestManage.jsx';
 import {
+  addDays, today, dayName,
   fmtDate, fmtDateTime, fmtWeekRange, STATUS_NAMES, statusTone, SEVERITY_NAMES, SEVERITY_TONE,
 } from '../lib/format.js';
 
@@ -48,6 +50,7 @@ export default function Approvals() {
               { value: 'exceptions', label: `חריגות (${counts.exceptions})` },
               { value: 'requests', label: `בקשות (${counts.requests})` },
               { value: 'availability', label: `זמינות (${counts.availability})` },
+              { value: 'history', label: 'היסטוריה' },
             ]}
           />
         }
@@ -62,6 +65,7 @@ export default function Approvals() {
         />
       )}
       {tab === 'availability' && <AvailabilityQueue query={availability} onChanged={reloadAll} />}
+      {tab === 'history' && <DecidedRequests onChanged={reloadAll} />}
     </>
   );
 }
@@ -492,3 +496,101 @@ const Detail = ({ label, value }) => (
     <dd style={{ margin: 0 }}>{value}</dd>
   </div>
 );
+
+/* ── היסטוריה: בקשות שאושרו / נדחו / בוטלו ─────────────────── */
+
+export function DecidedRequests({ onChanged, initialStatus = 'approved,rejected', title = 'בקשות שהוכרעו' }) {
+  const [status, setStatus] = useState(initialStatus);
+  const [range, setRange] = useState({ from: addDays(today(), -60), to: addDays(today(), 60) });
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState(null);
+  const query = useApi('/api/requests', { status, from: range.from, to: range.to, limit: 200 });
+
+  const rows = (query.data?.requests ?? []).filter(
+    (r) => !search.trim() || r.user_name?.includes(search.trim()) || r.type_name?.includes(search.trim()),
+  );
+
+  return (
+    <>
+      <Panel
+        title={title}
+        subtitle="לחיצה על שורה פותחת פירוט — ומשם עריכה, החזרה לתיקון או ביטול"
+        actions={
+          <Segmented
+            label="סטטוס"
+            value={status}
+            onChange={setStatus}
+            options={[
+              { value: 'approved,rejected', label: 'הכול' },
+              { value: 'approved', label: 'אושרו' },
+              { value: 'rejected', label: 'נדחו' },
+              { value: 'cancelled', label: 'בוטלו' },
+            ]}
+          />
+        }
+        flush
+      >
+        <div className="panel-body row" style={{ gap: 'var(--space-3)' }}>
+          <label className="small">
+            מתאריך{' '}
+            <input type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} style={{ width: 'auto' }} />
+          </label>
+          <label className="small">
+            עד{' '}
+            <input type="date" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} style={{ width: 'auto' }} />
+          </label>
+          <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="חיפוש לפי שם או סוג"
+            aria-label="חיפוש" style={{ maxWidth: 220 }} />
+        </div>
+        <StateView
+          loading={query.loading}
+          error={query.error}
+          onRetry={query.reload}
+          empty={!query.loading && rows.length === 0}
+          emptyProps={{ icon: '🗂️', title: 'אין בקשות בטווח הזה' }}
+        >
+          <div className="table-wrap">
+            <table className="table table-cards">
+              <thead>
+                <tr><th>מטמיע</th><th>סוג</th><th>תאריך</th><th>שעות</th><th>סטטוס</th><th>הוכרע</th><th /></tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id}>
+                    <td data-label="מטמיע" className="bold">
+                      {r.user_name}
+                      {r.site_name && <div className="tiny muted">{r.site_name}</div>}
+                    </td>
+                    <td data-label="סוג">{r.type_name}</td>
+                    <td data-label="תאריך" className="tnum">{dayName(r.constraint_date)} {fmtDate(r.constraint_date)}</td>
+                    <td data-label="שעות" className="tnum">{r.start_time.slice(0, 5)}–{r.end_time.slice(0, 5)}</td>
+                    <td data-label="סטטוס">
+                      <Tag tone={statusTone(r.status)}>{STATUS_NAMES[r.status] ?? r.status}</Tag>
+                      {r.auto_approved && <span className="tiny muted"> (אוטומטי)</span>}
+                    </td>
+                    <td data-label="הוכרע" className="small">
+                      {r.status === 'cancelled'
+                        ? <>{r.cancelled_by_name ?? '—'}<div className="tiny muted">{r.cancelled_at ? fmtDateTime(r.cancelled_at) : ''}</div></>
+                        : <>{r.approver_name ?? (r.auto_approved ? 'אוטומטית' : '—')}<div className="tiny muted">{r.decided_at ? fmtDateTime(r.decided_at) : ''}</div></>}
+                      {r.decision_note && <div className="tiny muted">{r.decision_note}</div>}
+                    </td>
+                    <td>
+                      <button type="button" className="btn btn-sm" onClick={() => setSelected(r)}>פירוט</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </StateView>
+      </Panel>
+      {selected && (
+        <RequestManageDialog
+          request={selected}
+          onClose={() => setSelected(null)}
+          onChanged={() => { query.reload(); onChanged?.(); }}
+        />
+      )}
+    </>
+  );
+}
