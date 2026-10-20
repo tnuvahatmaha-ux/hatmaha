@@ -9,6 +9,7 @@ import { uuid, dateStr, timeStr, idParam } from '../schemas/common.schema.js';
 import * as svc from '../services/requests.service.js';
 import { query } from '../lib/db.js';
 import { decide } from '../permissions/engine.js';
+import { AppError } from '../lib/errors.js';
 import { rejectManagerSelfSubmission } from '../middleware/rejectManagerSelfSubmission.js';
 
 export const requestsRouter = Router();
@@ -60,6 +61,10 @@ requestsRouter.get(
   validate({ params: idParam }),
   async (req, res) => {
     const request = await svc.get(req.params.id);
+    // מטמיע רואה רק בקשות של עצמו, גם אם יש לו צפייה ברמת האתר
+    if (['implementer', 'lead'].includes(req.user.baseRole) && request.user_id !== req.user.userId) {
+      throw new AppError('E_NOT_FOUND', 'הבקשה המבוקשת לא נמצאה');
+    }
     setETag(res, request);
     res.json({ request });
   },

@@ -54,7 +54,8 @@ export function createApp() {
     }),
   );
 
-  app.use(express.json({ limit: '1mb' }));
+  // 6mb — קובץ גאנט נשלח כ-base64 בגוף הבקשה
+  app.use(express.json({ limit: '6mb' }));
   app.use(requestContext);
 
   app.use(healthRouter);

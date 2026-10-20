@@ -560,7 +560,9 @@ function PreviewResult({ preview }) {
 
 function ConstraintsTab() {
   const toast = useToast();
-  const requests = useApi('/api/requests', { limit: 100 });
+  const { profile } = usePermissions();
+  // "הבקשות שלי" — רק של המשתמש עצמו, גם אצל מדריך שרואה בקשות של אחרים באישורים
+  const requests = useApi(profile?.id ? '/api/requests' : null, { limit: 100, userId: profile?.id });
   const [showForm, setShowForm] = useState(false);
   const [fixing, setFixing] = useState(null);
 

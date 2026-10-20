@@ -38,6 +38,8 @@ export const MARKERS = {
          where table_name = 'activities' and column_name = 'series_id') as ok`,
   25: `select exists (select 1 from information_schema.tables where table_name = 'chat_message_acks') as ok`,
   26: `select exists (select 1 from information_schema.tables where table_name = 'training_progress_updates') as ok`,
+  27: `select exists (select 1 from information_schema.columns
+         where table_name = 'profiles' and column_name = 'password_reset_at') as ok`,
 };
 
 export async function runPendingMigrations() {

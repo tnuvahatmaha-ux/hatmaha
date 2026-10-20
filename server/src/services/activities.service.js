@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { query, withTransaction } from '../lib/db.js';
-import { toInstants, weekDays, addDays } from '../lib/time.js';
+import { toInstants, addDays } from '../lib/time.js';
 import { AppError } from '../lib/errors.js';
 import { evaluateAndExecute } from '../rules/exceptions.js';
 import { registerAction } from '../rules/actions.js';
@@ -437,9 +437,17 @@ export async function remove(actor, id, { series = false } = {}) {
  * ואת השיבוצים מהגרסה האחרונה של הסידור לאותו שבוע — כדי שאפשר יהיה לראות
  * התנגשויות לפני ששומרים.
  */
-export async function board({ siteId, weekStart }) {
-  const days = weekDays(weekStart);
-  const to = addDays(weekStart, 6);
+/** יום ראשון של השבוע שהתאריך בו */
+const sundayOf = (date) => addDays(date, -new Date(`${date}T12:00:00Z`).getUTCDay());
+
+export async function board({ siteId, weekStart: week, from, to: until }) {
+  // שבוע (ברירת המחדל), או טווח חופשי — יום אחד או חודש — מאותו מבנה
+  const weekStart = week ?? from;
+  const to = week ? addDays(week, 6) : until;
+  const days = [];
+  for (let d = weekStart; d <= to; d = addDays(d, 1)) days.push(d);
+  // הסידור והזמינות נשמרים לפי שבוע: כל השבועות שנוגעים בטווח
+  const firstWeek = sundayOf(weekStart);
 
   const [people, activities, participants, shifts, phaseRows] = await Promise.all([
     query(
@@ -478,16 +486,17 @@ export async function board({ siteId, weekStart }) {
          join roster_versions v on v.id = ra.version_id
          join locations l on l.id = ra.location_id
          left join shift_types st on st.id = ra.shift_type_id
-        where v.site_id = $1 and v.week_start = $2 and v.deleted_at is null and ra.deleted_at is null
-          and v.version_number = (select max(version_number) from roster_versions
-                                   where site_id = $1 and week_start = $2 and deleted_at is null)
+        where v.site_id = $1 and v.week_start between $2 and $3 and v.deleted_at is null and ra.deleted_at is null
+          and ra.assignment_date between $4 and $3
+          and v.version_number = (select max(version_number) from roster_versions v2
+                                   where v2.site_id = $1 and v2.week_start = v.week_start and v2.deleted_at is null)
         order by ra.assignment_date, ra.start_time`,
-      [siteId, weekStart],
+      [siteId, firstWeek, to, weekStart],
     ),
     query(
       `select d::date::text as day, app.site_period_on($1, d::date)::text as period
-         from generate_series($2::date, $2::date + 6, interval '1 day') d`,
-      [siteId, weekStart],
+         from generate_series($2::date, $3::date, interval '1 day') d`,
+      [siteId, weekStart, to],
     ),
   ]);
 
@@ -508,12 +517,13 @@ export async function board({ siteId, weekStart }) {
             'לא יכול'
        from availability_cells c
        join availability_declarations d on d.id = c.declaration_id
-      where d.site_id = $4 and d.week_start = $1::date and c.value = 'cannot'
+      where d.site_id = $4 and d.week_start between $5::date and $2::date and c.value = 'cannot'
+        and c.cell_date between $1::date and $2::date
         and d.status in ('ok', 'pending_approval', 'approved')
         and d.superseded_at is null and d.deleted_at is null
         and d.user_id = any($3::uuid[])
       order by 2, 3`,
-    [weekStart, to, ids, siteId],
+    [weekStart, to, ids, siteId, firstWeek],
   );
 
   const byActivity = new Map();

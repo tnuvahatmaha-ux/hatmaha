@@ -45,6 +45,7 @@ export const NAV_ICONS = {
   '/messages': MessageSquare,
   '/skills': Gauge,
   '/training': ListChecks,
+  '/attendance': Clock,
   '/reports': BarChart3,
   '/notifications': Bell,
   '/settings': Settings,

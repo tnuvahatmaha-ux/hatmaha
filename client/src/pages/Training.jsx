@@ -1,20 +1,32 @@
 import { Fragment, useMemo, useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { useApi, useAction } from '../lib/useApi.js';
 import { post, patch, del } from '../lib/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { usePermissions } from '../context/PermissionsContext.jsx';
 import { ViewHead } from '../components/layout/AppLayout.jsx';
-import { Panel, StateView, Tag, Field, Modal, Notice, Empty } from '../components/ui/index.jsx';
+import { Panel, StateView, Tag, Field, Modal, Notice, Empty, Segmented } from '../components/ui/index.jsx';
 import { fmtDate, fmtDateTime, fmtWeekRange, today, addDays, weekStartOf, STATUS_NAMES, statusTone } from '../lib/format.js';
 
 const DAY_PX = 14;
 const days = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 
+/** סטטוס לפי אחוז — אותו סטטוס בטבלה ובסימון המרוכז */
+export const STAGE_STATUSES = [
+  { pct: 0, label: 'לא התחיל' },
+  { pct: 25, label: '25%' },
+  { pct: 50, label: 'בתהליך · 50%' },
+  { pct: 75, label: '75%' },
+  { pct: 100, label: 'הושלם' },
+];
+const statusOf = (pct) => (pct >= 100 ? { label: 'הושלם', tone: 'ok' } : pct > 0 ? { label: `${pct}%`, tone: 'accent' } : { label: 'לא התחיל', tone: '' });
+
 /**
- * הכשרה — גאנט לכל מטמיע.
+ * הכשרה — מנהל ההטמעה והמדריכים בלבד (המטמיע אינו רואה את הלשונית).
  *
- * כל שורה היא שלב עם תאריך התחלה ויעד; המילוי בפס הוא האחוז המאושר.
- * מדריך (או המטמיע) מדווח התקדמות שבועית, ומנהל ההטמעה מאשר בתור שבראש המסך.
+ * שתי תצוגות: טבלה — שורה לכל עובד ועמודה לכל שלב, עם סימון סטטוס לכמה שלבים
+ * יחד; וגאנט — שלבי ההכשרה על ציר הזמן. מדריך מדווח, ומנהל ההטמעה מאשר.
+ * גאנט כללי אפשר לטעון מקובץ ולשייך אליו עובדים.
  */
 export default function Training() {
   const { can, role } = usePermissions();
@@ -23,6 +35,8 @@ export default function Training() {
   const [domainId, setDomainId] = useState('');
   const [selected, setSelected] = useState(null);
   const [adding, setAdding] = useState(null);
+  const [view, setView] = useState('table');
+  const [importing, setImporting] = useState(false);
 
   const self = role === 'implementer' || role === 'lead';
   const canEdit = can('implementers', 'edit');
@@ -30,7 +44,7 @@ export default function Training() {
 
   const sites = useApi(self ? null : '/api/sites');
   const domains = useApi(self ? null : '/api/settings/domains');
-  const plans = useApi('/api/training/plans', { siteId: siteId || undefined, domainId: domainId || undefined });
+  const plans = useApi(self ? null : '/api/training/plans', { siteId: siteId || undefined, domainId: domainId || undefined });
   const pending = useApi(canApprove ? '/api/training/progress/pending' : null);
 
   const people = plans.data?.people ?? [];
@@ -45,13 +59,20 @@ export default function Training() {
     { onError: (err) => toast.error(err) },
   );
 
+  if (self) return <Navigate to="/" replace />;
+
   return (
     <>
       <ViewHead
-        title={self ? 'ההכשרה שלי' : 'הכשרה'}
-        subtitle="שלבי ההכשרה על ציר הזמן, והתקדמות שבועית מאושרת באחוזים"
-        actions={!self && (
+        title="הכשרה"
+        subtitle="סטטוס שלבי ההכשרה של כל עובד, והתקדמות מאושרת באחוזים"
+        actions={(
           <>
+            <Segmented label="תצוגה" value={view} onChange={setView}
+              options={[{ value: 'table', label: 'טבלה' }, { value: 'gantt', label: 'גאנט' }]} />
+            {canEdit && (
+              <button type="button" className="btn btn-sm" onClick={() => setImporting(true)}>טעינת גאנט מקובץ</button>
+            )}
             <select value={siteId} onChange={(e) => setSiteId(e.target.value)} aria-label="אתר" style={{ width: 'auto' }}>
               <option value="">כל האתרים</option>
               {(sites.data?.sites ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -98,10 +119,16 @@ export default function Training() {
         error={plans.error}
         onRetry={plans.reload}
         empty={!plans.loading && people.length === 0}
-        emptyProps={{ icon: '🎓', title: self ? 'עדיין לא הוגדרה לך תוכנית הכשרה' : 'אין מטמיעים בסינון הזה' }}
+        emptyProps={{ icon: '🎓', title: 'אין מטמיעים בסינון הזה' }}
       >
-        <Gantt people={people} canEdit={canEdit} onSelect={setSelected} onAdd={setAdding} />
+        {view === 'table'
+          ? <StageTable people={people} canEdit={canEdit} autoApprove={role === 'manager'} onSelect={setSelected} onAdd={setAdding} onChanged={reload} />
+          : <Gantt people={people} canEdit={canEdit} onSelect={setSelected} onAdd={setAdding} />}
       </StateView>
+
+      {importing && (
+        <ImportDialog people={people} onClose={() => setImporting(false)} onSaved={() => { setImporting(false); reload(); }} />
+      )}
 
       {selected && (
         <StageDialog
@@ -371,12 +398,16 @@ function AddStagesDialog({ person, onClose, onSaved }) {
             <>
               <Field label="תבנית">
                 {(props) => (
-                  <select {...props} value={trackId || list[0].id} onChange={(e) => setTrackId(e.target.value)}>
+                  <select {...props} value={trackId || list[0].id} onChange={(e) => {
+                    setTrackId(e.target.value);
+                    const t = list.find((x) => x.id === e.target.value);
+                    if (t?.start_on) setStartOn(t.start_on);
+                  }}>
                     {list.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.items.length} שלבים)</option>)}
                   </select>
                 )}
               </Field>
-              <Field label="תאריך התחלה" hint="כל שלב מתחיל כשהקודם מסתיים">
+              <Field label="תאריך התחלה" hint="גאנט מקובץ שומר על הפערים בין השלבים; בתבנית רגילה כל שלב מתחיל כשהקודם מסתיים">
                 {(props) => <input {...props} type="date" value={startOn} onChange={(e) => setStartOn(e.target.value)} />}
               </Field>
             </>
@@ -394,6 +425,249 @@ function AddStagesDialog({ person, onClose, onSaved }) {
             <Field label="יעד">
               {(props) => <input {...props} type="date" value={single.dueOn} min={single.startOn} onChange={(e) => setSingle({ ...single, dueOn: e.target.value })} />}
             </Field>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * טבלת הכשרה: שורה לכל עובד, עמודה לכל שלב (לפי שם השלב), והסטטוסים באותה
+ * שורה. לחיצה על תא בוחרת אותו; אפשר לבחור שורה או עמודה שלמה, ולסמן סטטוס
+ * לכל הנבחרים בבת אחת.
+ */
+function StageTable({ people, canEdit, autoApprove, onSelect, onAdd, onChanged }) {
+  const toast = useToast();
+  const [picked, setPicked] = useState(() => new Set());
+  const [note, setNote] = useState('');
+
+  const columns = useMemo(() => {
+    const order = new Map();
+    for (const p of people) {
+      for (const i of p.items) {
+        const key = i.start_on ?? '9999';
+        if (!order.has(i.title) || key < order.get(i.title)) order.set(i.title, key);
+      }
+    }
+    return [...order.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([title]) => title);
+  }, [people]);
+
+  const cellOf = (person, title) => person.items.find((i) => i.title === title);
+  const toggle = (ids) => setPicked((prev) => {
+    const next = new Set(prev);
+    const all = ids.every((id) => next.has(id));
+    for (const id of ids) (all ? next.delete(id) : next.add(id));
+    return next;
+  });
+
+  const apply = useAction(
+    async (pct) => {
+      const out = await post('/api/training/progress/bulk', { itemIds: [...picked], progressPct: pct, note: note || null });
+      toast.success(out.status === 'pending'
+        ? `${out.updated} שלבים נשלחו לאישור מנהל ההטמעה`
+        : `${out.updated} שלבים עודכנו`);
+      setPicked(new Set());
+      setNote('');
+      onChanged();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  if (columns.length === 0) {
+    return (
+      <Panel>
+        <Empty icon="🎓" title="עדיין אין שלבי הכשרה" text="טענו גאנט כללי מקובץ ושייכו אליו עובדים, או הוסיפו שלבים לעובד מתבנית." />
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel flush>
+      {picked.size > 0 && (
+        <div className="bulk-bar">
+          <span className="bold small">נבחרו {picked.size} שלבים · סימון:</span>
+          {STAGE_STATUSES.map((st) => (
+            <button key={st.pct} type="button" className={`btn btn-sm ${st.pct === 100 ? 'btn-primary' : ''}`}
+              disabled={apply.busy} onClick={() => apply.run(st.pct)}>
+              {st.label}
+            </button>
+          ))}
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="הערה (לא חובה)" aria-label="הערה" style={{ width: 180 }} />
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setPicked(new Set())}>ניקוי בחירה</button>
+          {!autoApprove && <span className="tiny muted">הסימון יישלח לאישור מנהל ההטמעה</span>}
+        </div>
+      )}
+      <div className="table-wrap stage-table-wrap">
+        <table className="table stage-table">
+          <thead>
+            <tr>
+              <th className="stage-sticky">עובד</th>
+              <th className="tnum">סה״כ</th>
+              {columns.map((title) => {
+                const ids = people.map((p) => cellOf(p, title)?.id).filter(Boolean);
+                return (
+                  <th key={title}>
+                    <label className="row" style={{ gap: 4, alignItems: 'center', fontWeight: 600 }}>
+                      <input type="checkbox" checked={ids.length > 0 && ids.every((id) => picked.has(id))}
+                        onChange={() => toggle(ids)} aria-label={`בחירת כל העמודה ${title}`} />
+                      <span>{title}</span>
+                    </label>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {people.map((p) => {
+              const ids = p.items.map((i) => i.id);
+              return (
+                <tr key={p.id}>
+                  <td className="stage-sticky">
+                    <label className="row" style={{ gap: 6, alignItems: 'center' }}>
+                      <input type="checkbox" checked={ids.length > 0 && ids.every((id) => picked.has(id))}
+                        disabled={!ids.length} onChange={() => toggle(ids)} aria-label={`בחירת כל השלבים של ${p.full_name}`} />
+                      <span>
+                        <span className="bold">{p.full_name}</span>
+                        <span className="tiny muted" style={{ display: 'block' }}>
+                          {[p.domains, p.mentor_name && `מדריך: ${p.mentor_name}`].filter(Boolean).join(' · ')}
+                        </span>
+                      </span>
+                    </label>
+                    {canEdit && <button type="button" className="btn btn-sm btn-ghost tiny" onClick={() => onAdd(p)}>+ שלבים</button>}
+                  </td>
+                  <td className="tnum bold">{p.overall_pct != null ? `${p.overall_pct}%` : '—'}</td>
+                  {columns.map((title) => {
+                    const item = cellOf(p, title);
+                    if (!item) return <td key={title} className="muted tiny">—</td>;
+                    const st = statusOf(item.progress_pct);
+                    const on = picked.has(item.id);
+                    return (
+                      <td key={title} className={`stage-cell${on ? ' is-picked' : ''}`}>
+                        <button type="button" className="stage-pick" onClick={() => toggle([item.id])} aria-pressed={on}
+                          title={`${item.title} · ${fmtDate(item.start_on)}–${fmtDate(item.due_on)}`}>
+                          <Tag tone={st.tone}>{st.label}</Tag>
+                          {item.pending_pct != null && <span className="tiny" style={{ color: 'var(--warn)' }}>⏳ {item.pending_pct}%</span>}
+                        </button>
+                        <button type="button" className="stage-more" onClick={() => onSelect({ item, person: p })} aria-label="פרטי השלב">⋯</button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+/** קריאת קובץ ל-base64, בלי הקידומת data: */
+const readBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+  reader.onerror = () => reject(reader.error);
+  reader.readAsDataURL(file);
+});
+
+/**
+ * טעינת גאנט הכשרה כללי מקובץ (אקסל או CSV): תצוגה מקדימה שאפשר לתקן, שם
+ * לגאנט, ובחירת העובדים שישויכו אליו. הגאנט נשמר כתבנית עם תאריכים, כך
+ * שאפשר לשייך אליו עובדים נוספים גם אחר כך ("+ שלבים" ← מתבנית).
+ */
+function ImportDialog({ people, onClose, onSaved }) {
+  const toast = useToast();
+  const [name, setName] = useState('');
+  const [rows, setRows] = useState(null);
+  const [warnings, setWarnings] = useState([]);
+  const [userIds, setUserIds] = useState(() => new Set());
+
+  const parse = useAction(
+    async (file) => {
+      if (file.size > 5 * 1024 * 1024) throw new Error('הקובץ גדול מ-5MB');
+      const out = await post('/api/training/import/parse', { fileName: file.name, data: await readBase64(file) });
+      setRows(out.rows);
+      setWarnings(out.warnings ?? []);
+      if (!name) setName(file.name.replace(/\.[^.]+$/, ''));
+    },
+    { onError: (err) => toast.error(err) },
+  );
+  const save = useAction(
+    async () => {
+      const out = await post('/api/training/import/apply', { name: name.trim(), rows, userIds: [...userIds] });
+      toast.success(`הגאנט נשמר${out.people ? ` ושויך ל-${out.people} עובדים (${out.created} שלבים)` : ''}`);
+      onSaved();
+    },
+    { onError: (err) => toast.error(err) },
+  );
+
+  const setRow = (i, patchRow) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patchRow } : r)));
+  const toggleUser = (id) => setUserIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  return (
+    <Modal title="טעינת גאנט הכשרה כללי" onClose={onClose} width={760}
+      footer={<>
+        <button type="button" className="btn btn-primary" onClick={() => save.run()}
+          disabled={save.busy || !rows?.length || !name.trim()}>
+          {save.busy ? 'שומר…' : userIds.size ? `שמירה ושיוך ${userIds.size} עובדים` : 'שמירת הגאנט'}
+        </button>
+        <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>
+      </>}>
+      <Field label="קובץ (xlsx או csv)" hint="עמודות: שם השלב, תאריך התחלה, תאריך סיום (או משך בימים). שורת כותרות מזוהה לבד.">
+        {(props) => (
+          <input {...props} type="file" accept=".xlsx,.csv"
+            onChange={(e) => e.target.files?.[0] && parse.run(e.target.files[0])} disabled={parse.busy} />
+        )}
+      </Field>
+      {parse.busy && <div className="small muted">קורא את הקובץ…</div>}
+      {warnings.length > 0 && (
+        <Notice tone="warn" icon="⚠️" title="שורות שדולגו">
+          <ul className="small" style={{ margin: 0, paddingInlineStart: 18 }}>{warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+        </Notice>
+      )}
+
+      {rows && (
+        <>
+          <Field label="שם הגאנט" required>
+            {(props) => <input {...props} value={name} onChange={(e) => setName(e.target.value)} />}
+          </Field>
+          <div className="bold small" style={{ marginBlockEnd: 6 }}>{rows.length} שלבים</div>
+          <div className="table-wrap" style={{ maxHeight: 260, overflow: 'auto' }}>
+            <table className="table">
+              <thead><tr><th>שלב</th><th>התחלה</th><th>סיום</th><th /></tr></thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td><input value={r.title} onChange={(e) => setRow(i, { title: e.target.value })} aria-label="שם השלב" /></td>
+                    <td><input type="date" value={r.startOn} onChange={(e) => setRow(i, { startOn: e.target.value })} aria-label="התחלה" /></td>
+                    <td><input type="date" value={r.dueOn} min={r.startOn} onChange={(e) => setRow(i, { dueOn: e.target.value })} aria-label="סיום" /></td>
+                    <td><button type="button" className="btn btn-sm btn-ghost" onClick={() => setRows(rows.filter((_, j) => j !== i))} aria-label="הסרת השורה">✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="divider" />
+          <div className="row" style={{ justifyContent: 'space-between', marginBlockEnd: 6 }}>
+            <span className="bold small">שיוך עובדים ({userIds.size})</span>
+            <button type="button" className="btn btn-sm btn-ghost"
+              onClick={() => setUserIds(userIds.size === people.length ? new Set() : new Set(people.map((p) => p.id)))}>
+              {userIds.size === people.length ? 'ניקוי' : 'בחירת כולם'}
+            </button>
+          </div>
+          <div className="chip-grid">
+            {people.map((p) => (
+              <label key={p.id} className="row small" style={{ gap: 6, alignItems: 'center' }}>
+                <input type="checkbox" checked={userIds.has(p.id)} onChange={() => toggleUser(p.id)} />
+                {p.full_name}
+              </label>
+            ))}
           </div>
         </>
       )}

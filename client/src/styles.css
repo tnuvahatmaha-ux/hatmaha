@@ -927,7 +927,7 @@ button.roster-hours:hover { background: var(--fill-strong); }
 .roster-corner { background: var(--surface); align-self: stretch; }
 .roster-loc { align-self: stretch; outline: 4px solid var(--surface); }
 .roster-loc { box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.18); }
-.roster-leads-head { background: var(--primary-bg, var(--surface-2)); color: var(--primary); }
+.roster-leads-head { background: var(--surface-2); color: var(--primary); }
 .roster-leads { display: flex; flex-direction: column; gap: 4px; }
 
 /* כפתור כניסה / יציאה במסך הבית */
@@ -1000,3 +1000,27 @@ button.roster-hours:hover { background: var(--fill-strong); }
   background: var(--surface-2); font-size: 13px;
   border: none; cursor: pointer; color: inherit; font: inherit;
 }
+
+/* ── טבלת הכשרה ── */
+.bulk-bar {
+  position: sticky; top: 0; z-index: 3;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.stage-table-wrap { overflow: auto; max-height: 70vh; }
+.stage-table th, .stage-table td { white-space: nowrap; vertical-align: middle; }
+.stage-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+.stage-table .stage-sticky { position: sticky; inset-inline-start: 0; z-index: 1; background: var(--surface); min-width: 170px; }
+.stage-table thead .stage-sticky { z-index: 3; }
+.stage-cell { position: relative; }
+.stage-cell.is-picked { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.stage-pick { all: unset; cursor: pointer; display: inline-flex; flex-direction: column; gap: 2px; padding: 2px 4px; border-radius: 6px; }
+.stage-pick:focus-visible { outline: 2px solid var(--primary); }
+.stage-more { all: unset; cursor: pointer; padding: 0 6px; color: var(--muted); font-weight: 700; }
+.stage-more:hover { color: var(--ink); }
+.chip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; max-height: 200px; overflow: auto; }
+.link { all: unset; cursor: pointer; color: var(--primary); }
+.link:hover { text-decoration: underline; }
+.link:focus-visible { outline: 2px solid var(--primary); border-radius: 4px; }

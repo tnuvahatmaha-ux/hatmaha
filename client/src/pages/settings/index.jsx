@@ -11,6 +11,7 @@ import MentorsTab from './MentorsTab.jsx';
 import TrainingTracksTab from './TrainingTracksTab.jsx';
 import PermissionsTab from './PermissionsTab.jsx';
 import AuditTab from './AuditTab.jsx';
+import AccountsTab from './AccountsTab.jsx';
 import SystemTab from './SystemTab.jsx';
 
 /**
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'rules', label: 'חוקיות', need: ['rules', 'view'], Component: RulesTab },
   { id: 'mentors', label: 'ניהול מדריכים', need: ['mentors', 'view'], Component: MentorsTab },
   { id: 'training', label: 'תבניות הכשרה', need: ['settings', 'edit'], Component: TrainingTracksTab },
+  { id: 'accounts', label: 'משתמשים וסיסמאות', need: ['users', 'edit'], Component: AccountsTab, managerOnly: true },
   { id: 'permissions', label: 'הרשאות', need: ['permissions', 'view'], Component: PermissionsTab, managerOnly: true },
   { id: 'audit', label: 'יומן ביקורת', need: ['audit', 'view'], Component: AuditTab },
   { id: 'system', label: 'מערכת', need: ['settings', 'manage'], Component: SystemTab },

@@ -94,6 +94,51 @@ trainingRouter.post(
   async (req, res) => res.status(201).json(await svc.reportProgress(req.user, req.params.id, req.body)),
 );
 
+/** סימון סטטוס לכמה שלבים יחד — ה-Scope של כל שלב נבדק ב-service */
+trainingRouter.post(
+  '/progress/bulk',
+  requirePermission('implementers', 'view'),
+  validate({
+    body: z.object({
+      itemIds: z.array(uuid).min(1).max(500),
+      progressPct: z.number().int().min(0).max(100),
+      note: z.string().trim().max(1000).nullish(),
+    }),
+  }),
+  async (req, res) => res.json(await svc.reportBulk(req.user, req.body)),
+);
+
+/** גאנט כללי מקובץ: קריאה ותצוגה מקדימה, ואז שמירה ושיוך עובדים */
+trainingRouter.post(
+  '/import/parse',
+  requirePermission('implementers', 'edit'),
+  validate({
+    body: z.object({
+      fileName: z.string().trim().min(1).max(255),
+      data: z.string().min(1).max(7_000_000),
+    }),
+  }),
+  async (req, res) => res.json(await svc.parseGanttFile(req.body)),
+);
+
+trainingRouter.post(
+  '/import/apply',
+  requirePermission('implementers', 'edit'),
+  validate({
+    body: z.object({
+      name: z.string().trim().min(1).max(200),
+      trackId: uuid.optional(),
+      userIds: z.array(uuid).max(500).default([]),
+      rows: z.array(z.object({
+        title: z.string().trim().min(1).max(200),
+        startOn: dateStr,
+        dueOn: dateStr,
+      }).refine((r) => r.dueOn >= r.startOn, { message: 'תאריך הסיום לפני ההתחלה' })).min(1).max(60),
+    }),
+  }),
+  async (req, res) => res.status(201).json(await svc.importGantt(req.user, req.body)),
+);
+
 trainingRouter.get(
   '/progress/pending',
   requirePermission('users', 'view'),

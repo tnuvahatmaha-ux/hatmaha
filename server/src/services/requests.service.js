@@ -42,6 +42,8 @@ const BASE_SELECT = `
 /** רשימה, מסוננת ל-Scope האפקטיבי של הקורא (AC-13) */
 export async function list(principal, filters = {}) {
   const isManager = principal.baseRole === 'manager';
+  // מטמיע ומוביל רואים רק את הבקשות של עצמם — לא של מי שעובד איתם באותו אתר
+  const selfOnly = ['implementer', 'lead'].includes(principal.baseRole);
   return query(
     `${BASE_SELECT}
        and ($1 or cr.user_id = $2 or cr.user_id = any($3::uuid[]) or cr.site_id = any($4::uuid[]))
@@ -55,8 +57,8 @@ export async function list(principal, filters = {}) {
     [
       isManager,
       principal.userId,
-      principal.scopes.assignedUserIds,
-      principal.scopes.siteIds,
+      selfOnly ? [] : principal.scopes.assignedUserIds,
+      selfOnly ? [] : principal.scopes.siteIds,
       filters.status ? String(filters.status).split(',') : null,
       filters.userId ?? null,
       filters.siteId ?? null,

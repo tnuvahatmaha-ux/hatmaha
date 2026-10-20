@@ -7,6 +7,8 @@ import { withIdempotency } from '../lib/idempotency.js';
 import { setETag } from '../lib/etag.js';
 import { uuid, dateStr, name, optionalText, idParam } from '../schemas/common.schema.js';
 import * as svc from '../services/users.service.js';
+import * as accounts from '../services/accounts.service.js';
+import { AppError } from '../lib/errors.js';
 
 export const usersRouter = Router();
 usersRouter.use(requireAuth);
@@ -27,6 +29,28 @@ usersRouter.get(
     }),
   }),
   async (req, res) => res.json({ users: await svc.list(req.user, req.validQuery) }),
+);
+
+/** חשבונות: שם משתמש ואיפוס סיסמה — מנהל ההטמעה בלבד */
+const managerOnly = (req, _res, next) =>
+  next(req.user.baseRole === 'manager' ? undefined : new AppError('E_FORBIDDEN', 'רק מנהל ההטמעה מנהל סיסמאות'));
+
+usersRouter.get(
+  '/accounts',
+  requirePermission('users', 'edit'),
+  managerOnly,
+  async (_req, res) => res.json({ accounts: await accounts.list() }),
+);
+
+usersRouter.post(
+  '/:id/password',
+  requirePermission('users', 'edit', userScope),
+  managerOnly,
+  validate({
+    params: idParam,
+    body: z.object({ password: z.string().min(8, 'סיסמה של 8 תווים לפחות').max(72) }),
+  }),
+  async (req, res) => res.json(await accounts.resetPassword(req.user, req.params.id, req.body)),
 );
 
 usersRouter.get(

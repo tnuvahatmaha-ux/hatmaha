@@ -603,19 +603,52 @@ const constraintLabel = (c) =>
 /** האם פעילות חופפת לאילוץ באותו יום */
 const clashes = (c, a) => fullDay(c) || (fmtClock(a.start_time) < fmtClock(c.end_time) && fmtClock(c.start_time) < fmtClock(a.end_time));
 
+const MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+const monthEndOf = (date) => {
+  const d = new Date(`${date.slice(0, 7)}-01T12:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  d.setUTCDate(0);
+  return d.toISOString().slice(0, 10);
+};
+const shiftMonth = (date, n) => {
+  const d = new Date(`${date.slice(0, 7)}-01T12:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+/** הטווח שמוצג לפי התקופה: יום, שבוע (ראשון–שבת) או חודש קלנדרי */
+function periodRange(period, anchor) {
+  if (period === 'day') return { from: anchor, to: anchor, label: `${dayName(anchor)} ${fmtDate(anchor)}` };
+  if (period === 'month') {
+    const from = `${anchor.slice(0, 7)}-01`;
+    return { from, to: monthEndOf(from), label: `${MONTHS[Number(anchor.slice(5, 7)) - 1]} ${anchor.slice(0, 4)}` };
+  }
+  const from = weekStartOf(anchor);
+  return { from, to: addDays(from, 6), label: fmtWeekRange(from) };
+}
+
 function TrainingBoard({ sites, onEdit }) {
   const toast = useToast();
   const { can } = usePermissions();
   const [siteId, setSiteId] = useState('');
-  const [weekStart, setWeekStart] = useState(weekStartOf(today()));
+  const [period, setPeriod] = useState('week');
+  const [anchor, setAnchor] = useState(today());
+  const [personId, setPersonId] = useState('');
+  const [typeId, setTypeId] = useState('');
   const [cell, setCell] = useState(null);
   const [layout, setLayout] = useState('people');
+  const types = useApi('/api/settings/lookups/activityTypes');
 
   useEffect(() => {
     if (!siteId && sites.length) setSiteId(sites[0].id);
   }, [sites, siteId]);
 
-  const board = useApi(siteId ? '/api/activities/board' : null, { siteId, weekStart });
+  const range = periodRange(period, anchor);
+  const board = useApi(
+    siteId ? '/api/activities/board' : null,
+    period === 'week' ? { siteId, weekStart: range.from } : { siteId, from: range.from, to: range.to },
+  );
+  const move = (dir) => setAnchor(period === 'month' ? shiftMonth(anchor, dir) : addDays(anchor, dir * (period === 'day' ? 1 : 7)));
 
   // שמירה בטופס הפעילות מרעננת את הלוח
   useEffect(() => {
@@ -640,7 +673,20 @@ function TrainingBoard({ sites, onEdit }) {
     { onError: (err) => { toast.error(err); board.reload(); } },
   );
 
-  const data = board.data;
+  // סינון לפי מטמיע ולפי סוג פעילות — על הנתונים שנטענו
+  const data = useMemo(() => {
+    const raw = board.data;
+    if (!raw) return raw;
+    const activities = raw.activities.filter((a) =>
+      (!typeId || a.activity_type_id === typeId)
+      && (!personId || a.participant_ids.includes(personId) || a.owner_user_id === personId));
+    return {
+      ...raw,
+      activities,
+      people: personId ? raw.people.filter((p) => p.id === personId) : raw.people,
+      shifts: typeId ? [] : raw.shifts,
+    };
+  }, [board.data, personId, typeId]);
   const editable = can('activities', 'edit');
 
   /** מה יש לאדם ביום: פעילויות שהוא נוכח בהן או מעביר, ומשמרות */
@@ -670,10 +716,10 @@ function TrainingBoard({ sites, onEdit }) {
 
   return (
     <Panel
-      title="לו״ז שבועי"
+      title={period === 'day' ? 'לו״ז יומי' : period === 'month' ? 'לו״ז חודשי' : 'לו״ז שבועי'}
       subtitle={layout === 'people'
         ? 'מי מהמטמיעים נוכח באיזו פעילות, בכל יום. לחיצה על תא — שיוך לפעילות קיימת או פעילות חדשה'
-        : 'לכל פעילות בשבוע — מי שובץ אליה'}
+        : 'לכל פעילות בתקופה — מי שובץ אליה'}
       actions={
         <>
           <Segmented
@@ -682,14 +728,28 @@ function TrainingBoard({ sites, onEdit }) {
             onChange={setLayout}
             options={[{ value: 'people', label: 'לפי מטמיע' }, { value: 'activity', label: 'לפי פעילות' }]}
           />
-          <select value={siteId} onChange={(e) => setSiteId(e.target.value)} aria-label="בחירת אתר" style={{ width: 'auto', minWidth: 160 }}>
+          <select value={siteId} onChange={(e) => { setSiteId(e.target.value); setPersonId(''); }} aria-label="בחירת אתר" style={{ width: 'auto', minWidth: 160 }}>
             {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
+          <select value={personId} onChange={(e) => setPersonId(e.target.value)} aria-label="סינון לפי מטמיע" style={{ width: 'auto' }}>
+            <option value="">כל המטמיעים</option>
+            {(board.data?.people ?? []).map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+          </select>
+          <select value={typeId} onChange={(e) => setTypeId(e.target.value)} aria-label="סינון לפי סוג פעילות" style={{ width: 'auto' }}>
+            <option value="">כל סוגי הפעילות</option>
+            {(types.data?.items ?? []).map((t) => <option key={t.id} value={t.id}>{t.name_he}</option>)}
+          </select>
+          <Segmented
+            label="תקופה"
+            value={period}
+            onChange={setPeriod}
+            options={[{ value: 'day', label: 'יומי' }, { value: 'week', label: 'שבועי' }, { value: 'month', label: 'חודשי' }]}
+          />
           <WeekNav
-            label={fmtWeekRange(weekStart)}
-            onPrev={() => setWeekStart(addDays(weekStart, -7))}
-            onNext={() => setWeekStart(addDays(weekStart, 7))}
-            onToday={() => setWeekStart(weekStartOf(today()))}
+            label={range.label}
+            onPrev={() => move(-1)}
+            onNext={() => move(1)}
+            onToday={() => setAnchor(today())}
           />
         </>
       }
@@ -697,7 +757,7 @@ function TrainingBoard({ sites, onEdit }) {
     >
       <StateView loading={board.loading && !data} error={board.error} onRetry={board.reload}
         empty={data && data.people.length === 0}
-        emptyProps={{ icon: '👥', title: 'אין מטמיעים משויכים לאתר בשבוע הזה' }}>
+        emptyProps={{ icon: '👥', title: 'אין מטמיעים משויכים לאתר בתקופה הזו' }}>
         {data && layout === 'activity' && <ByActivity data={data} onEdit={onEdit} />}
         {data && layout === 'people' && (
           <div className="roster-wrap" style={{ padding: '0 var(--space-3) var(--space-3)' }}>
@@ -778,7 +838,7 @@ function TrainingBoard({ sites, onEdit }) {
 /** שיבוץ לפי פעילות: כל פעילות בשבוע, ומי שובץ אליה */
 function ByActivity({ data, onEdit }) {
   const days = data.days.filter((d) => data.activities.some((a) => a.activity_date === d));
-  if (days.length === 0) return <Empty icon="🗓️" title="אין פעילויות בשבוע הזה" />;
+  if (days.length === 0) return <Empty icon="🗓️" title="אין פעילויות בתקופה הזו" />;
   return (
     <div className="table-wrap">
       <table className="table table-cards">

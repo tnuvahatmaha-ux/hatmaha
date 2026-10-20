@@ -82,7 +82,12 @@ activitiesRouter.get(
 activitiesRouter.get(
   '/board',
   requirePermission('activities', 'view', (req) => ({ siteId: req.query.siteId })),
-  validate({ query: z.object({ siteId: uuid, weekStart: sundayDate }) }),
+  validate({
+    query: z.object({ siteId: uuid, weekStart: sundayDate.optional(), from: dateStr.optional(), to: dateStr.optional() })
+      .refine((v) => v.weekStart || (v.from && v.to), { message: 'יש לבחור שבוע או טווח תאריכים' })
+      .refine((v) => !v.from || !v.to || (v.to >= v.from && (Date.parse(v.to) - Date.parse(v.from)) / 86_400_000 <= 42),
+        { message: 'טווח של עד 6 שבועות', path: ['to'] }),
+  }),
   async (req, res) => res.json(await svc.board(req.validQuery)),
 );
 

@@ -106,7 +106,7 @@ export async function addItem(actor, userId, { title, startOn, dueOn }) {
 export async function applyTrack(actor, userId, { trackId, startOn }) {
   return withTransaction({ actorId: actor.userId }, async (tx) => {
     const steps = await tx.query(
-      `select id, title, duration_days from training_track_items
+      `select id, title, duration_days, offset_days from training_track_items
         where track_id = $1 and deleted_at is null order by display_order`,
       [trackId],
     );
@@ -121,7 +121,9 @@ export async function applyTrack(actor, userId, { trackId, startOn }) {
     let order = base;
     let created = 0;
     for (const step of steps) {
-      const due = addDays(cursor, Math.max(1, step.duration_days) - 1);
+      // שלב עם היסט (מגאנט שנטען מקובץ) מתחיל בתאריך קבוע ביחס להתחלה; אחר — אחרי הקודם
+      const begin = step.offset_days != null ? addDays(startOn, step.offset_days) : cursor;
+      const due = addDays(begin, Math.max(1, step.duration_days) - 1);
       order += 10;
       const rows = await tx.query(
         `insert into user_training_items
@@ -129,10 +131,10 @@ export async function applyTrack(actor, userId, { trackId, startOn }) {
          values ($1, $2, $3, $4, $5, $6, $7)
          on conflict (user_id, track_item_id) where track_item_id is not null and deleted_at is null
          do nothing returning id`,
-        [userId, step.id, step.title, cursor, due, status, order],
+        [userId, step.id, step.title, begin, due, status, order],
       );
       created += rows.length;
-      cursor = addDays(due, 1);
+      if (addDays(due, 1) > cursor) cursor = addDays(due, 1);
     }
     return { created };
   });
@@ -179,43 +181,80 @@ export async function reportProgress(actor, itemId, { progressPct, note, weekSta
   return withTransaction({ actorId: actor.userId }, async (tx) => {
     const item = await tx.lock('user_training_items', itemId);
     if (!item || item.deleted_at) throw new AppError('E_NOT_FOUND', 'השלב לא נמצא');
-    const week = weekStart ?? weekStartOf(today());
-    const auto = isManager(actor);
-
-    // דיווח חדש מחליף דיווח שעוד ממתין על אותו שלב
-    await tx.query(
-      `update training_progress_updates set deleted_at = now(), deleted_by = $2
-        where user_training_item_id = $1 and status = 'pending' and deleted_at is null`,
-      [itemId, actor.userId],
-    );
-    const [row] = await tx.query(
-      `insert into training_progress_updates
-         (user_training_item_id, user_id, week_start, progress_pct, note, submitted_by,
-          status, decided_by, decided_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id, status`,
-      [itemId, item.user_id, week, progressPct, note ?? null, actor.userId,
-       auto ? 'approved' : 'pending', auto ? actor.userId : null, auto ? new Date() : null],
-    );
-
-    if (auto) {
-      await applyApproved(tx, itemId, progressPct);
-    } else {
-      const managers = await tx.query(
-        `select id from profiles where base_role = 'manager' and status = 'active' and deleted_at is null`,
-      );
+    const row = await reportIn(tx, actor, item, { progressPct, note, weekStart });
+    if (row.status === 'pending') {
       const [who] = await tx.query('select full_name from profiles where id = $1', [item.user_id]);
-      await notify(tx, {
-        typeCode: 'training_progress_submitted',
-        recipientIds: managers.map((m) => m.id),
-        title: 'דיווח התקדמות הכשרה ממתין לאישור',
-        body: `${who?.full_name ?? ''} — ${item.title ?? 'שלב'}: ${progressPct}%`,
-        entityType: 'training_progress_updates',
-        entityId: row.id,
-        payload: { url: '/training' },
-      });
+      await notifyManagers(tx, row.id, `${who?.full_name ?? ''} — ${item.title ?? 'שלב'}: ${progressPct}%`);
     }
     return row;
   });
+}
+
+async function notifyManagers(tx, entityId, body) {
+  const managers = await tx.query(
+    `select id from profiles where base_role = 'manager' and status = 'active' and deleted_at is null`,
+  );
+  await notify(tx, {
+    typeCode: 'training_progress_submitted',
+    recipientIds: managers.map((m) => m.id),
+    title: 'דיווח התקדמות הכשרה ממתין לאישור',
+    body,
+    entityType: 'training_progress_updates',
+    entityId,
+    payload: { url: '/training' },
+  });
+}
+
+/**
+ * סימון סטטוס לכמה שלבים יחד (מטבלת ההכשרה). אצל מדריך כל שלב נכנס לתור
+ * האישור כרגיל; אצל מנהל ההטמעה הוא מאושר מיד. התראה אחת למנהלים על הכול.
+ */
+export async function reportBulk(actor, { itemIds, progressPct, note }) {
+  const ids = scopeIds(actor);
+  return withTransaction({ actorId: actor.userId }, async (tx) => {
+    const items = await tx.query(
+      `select * from user_training_items where id = any($1::uuid[]) and deleted_at is null for update`,
+      [itemIds],
+    );
+    if (items.length !== new Set(itemIds).size) throw new AppError('E_NOT_FOUND', 'חלק מהשלבים לא נמצאו');
+    if (ids && items.some((i) => !ids.includes(i.user_id))) {
+      throw new AppError('E_FORBIDDEN', 'חלק מהשלבים שייכים למטמיעים שאינם באחריותך');
+    }
+    let pending = null;
+    for (const item of items) {
+      const row = await reportIn(tx, actor, item, { progressPct, note });
+      if (row.status === 'pending') pending = row;
+    }
+    if (pending) {
+      const people = new Set(items.map((i) => i.user_id)).size;
+      await notifyManagers(tx, pending.id, `${items.length} שלבים של ${people} מטמיעים: ${progressPct}%`);
+    }
+    return { updated: items.length, status: pending ? 'pending' : 'approved' };
+  });
+}
+
+async function reportIn(tx, actor, item, { progressPct, note, weekStart }) {
+  const itemId = item.id;
+  const week = weekStart ?? weekStartOf(today());
+  const auto = isManager(actor);
+
+  // דיווח חדש מחליף דיווח שעוד ממתין על אותו שלב
+  await tx.query(
+    `update training_progress_updates set deleted_at = now(), deleted_by = $2
+      where user_training_item_id = $1 and status = 'pending' and deleted_at is null`,
+    [itemId, actor.userId],
+  );
+  const [row] = await tx.query(
+    `insert into training_progress_updates
+       (user_training_item_id, user_id, week_start, progress_pct, note, submitted_by,
+        status, decided_by, decided_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id, status`,
+    [itemId, item.user_id, week, progressPct, note ?? null, actor.userId,
+     auto ? 'approved' : 'pending', auto ? actor.userId : null, auto ? new Date() : null],
+  );
+
+  if (auto) await applyApproved(tx, itemId, progressPct);
+  return row;
 }
 
 export async function pendingQueue(principal) {
@@ -282,11 +321,11 @@ export async function history(itemId) {
 export async function tracks() {
   const [list, items] = await Promise.all([
     query(
-      `select id, name, description, is_active from training_tracks
+      `select id, name, description, is_active, start_on from training_tracks
         where deleted_at is null order by name`,
     ),
     query(
-      `select id, track_id, title, duration_days, display_order from training_track_items
+      `select id, track_id, title, duration_days, offset_days, display_order from training_track_items
         where deleted_at is null order by display_order`,
     ),
   ]);
@@ -364,4 +403,171 @@ export async function progressReport(principal, filters) {
       completed_on: i.completed_on, last_approved_week: i.last_approved_week,
     };
   }));
+}
+
+/* ───────────────────────── גאנט כללי מקובץ ───────────────────────── */
+
+const HEADERS = {
+  title: ['שלב', 'משימה', 'פעילות', 'נושא', 'שם', 'תיאור', 'task', 'name', 'activity', 'stage', 'title'],
+  start: ['התחלה', 'מתאריך', 'start', 'begin', 'from'],
+  due: ['סיום', 'יעד', 'עד תאריך', 'end', 'due', 'finish', 'to'],
+  days: ['משך', 'ימים', 'duration', 'days'],
+};
+
+const cellText = (v) => {
+  if (v == null) return '';
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === 'object') return String(v.text ?? v.result ?? v.richText?.map((r) => r.text).join('') ?? '');
+  return String(v);
+};
+
+/** תאריך מתא: Date של אקסל, מספר סידורי, dd/mm/yyyy או yyyy-mm-dd */
+function parseDate(v) {
+  if (v == null || v === '') return null;
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+  if (typeof v === 'object' && v.result != null) return parseDate(v.result);
+  if (typeof v === 'number' && v > 20000 && v < 80000) {
+    return new Date(Date.UTC(1899, 11, 30) + v * 86_400_000).toISOString().slice(0, 10);
+  }
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/);
+  if (m) {
+    const year = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${year}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  }
+  return null;
+}
+
+/** CSV פשוט, עם תמיכה במרכאות */
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') quoted = false; else cur += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',' || c === ';' || c === '\t') { row.push(cur); cur = ''; }
+    else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+    else if (c !== '\r') cur += c;
+  }
+  if (cur || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+
+/**
+ * קריאת קובץ גאנט (xlsx או csv) לרשימת שלבים עם תאריכים. מזהה את עמודות
+ * השם, ההתחלה, הסיום והמשך לפי הכותרות; בלי כותרות — שם, התחלה, סיום לפי הסדר.
+ */
+export async function parseGanttFile({ fileName, data }) {
+  const buffer = Buffer.from(data, 'base64');
+  let table;
+  if (/\.csv$/i.test(fileName)) {
+    table = parseCsv(buffer.toString('utf8').replace(/^﻿/, ''));
+  } else {
+    const { default: ExcelJS } = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    try {
+      await wb.xlsx.load(buffer);
+    } catch {
+      throw new AppError('E_VALIDATION', 'לא הצלחנו לקרוא את הקובץ — יש לשמור אותו כ-xlsx או csv');
+    }
+    const ws = wb.worksheets[0];
+    if (!ws) throw new AppError('E_VALIDATION', 'בקובץ אין גיליונות');
+    table = [];
+    ws.eachRow({ includeEmpty: false }, (r) => {
+      const values = [];
+      r.eachCell({ includeEmpty: true }, (cell, col) => { values[col - 1] = cell.value; });
+      table.push(values);
+    });
+  }
+
+  // שורת הכותרות: הראשונה (מבין העשר הראשונות) שיש בה עמודת שם
+  const norm = (v) => cellText(v).trim().toLowerCase();
+  const find = (row, keys) => row.findIndex((v) => {
+    const t = norm(v);
+    // מילה קצרה (שם, עד, to) — רק כמילה שלמה, כדי ש"עד" לא יתפוס את "עדכון"
+    const words = t.split(/[\s/_-]+/);
+    return t && keys.some((k) => (k.length <= 3 ? words.includes(k) : t.includes(k)));
+  });
+  let headerAt = -1;
+  let cols = { title: 0, start: 1, due: 2, days: -1 };
+  for (let i = 0; i < Math.min(10, table.length); i++) {
+    const row = table[i] ?? [];
+    const title = find(row, HEADERS.title);
+    const start = find(row, HEADERS.start);
+    if (title >= 0 && (start >= 0 || find(row, HEADERS.days) >= 0)) {
+      headerAt = i;
+      cols = { title, start, due: find(row, HEADERS.due), days: find(row, HEADERS.days) };
+      break;
+    }
+  }
+
+  const rows = [];
+  const warnings = [];
+  let cursor = null;
+  for (const [i, raw] of table.slice(headerAt + 1).entries()) {
+    const row = raw ?? [];
+    const title = cellText(row[cols.title]).trim();
+    if (!title) continue;
+    let startOn = cols.start >= 0 ? parseDate(row[cols.start]) : null;
+    let dueOn = cols.due >= 0 ? parseDate(row[cols.due]) : null;
+    const days = cols.days >= 0 ? Number.parseInt(cellText(row[cols.days]), 10) : NaN;
+    if (!startOn && cursor) startOn = cursor;
+    if (startOn && !dueOn && Number.isFinite(days) && days > 0) dueOn = addDays(startOn, days - 1);
+    if (startOn && !dueOn) dueOn = startOn;
+    if (!startOn) {
+      warnings.push(`שורה ${headerAt + i + 2}: "${title}" — אין תאריך התחלה`);
+      continue;
+    }
+    if (dueOn < startOn) [startOn, dueOn] = [dueOn, startOn];
+    rows.push({ title: title.slice(0, 200), startOn, dueOn });
+    cursor = addDays(dueOn, 1);
+    if (rows.length >= 60) {
+      warnings.push('נטענו 60 השלבים הראשונים בלבד');
+      break;
+    }
+  }
+  if (!rows.length) throw new AppError('E_VALIDATION', 'לא נמצאו בקובץ שלבים עם תאריכים');
+  return { rows, warnings };
+}
+
+/**
+ * שמירת הגאנט הכללי כתבנית עם תאריכים, ושיוך עובדים אליו: כל עובד מקבל את
+ * השלבים בדיוק בתאריכים שבגאנט. עובד שכבר שויך לתבנית לא יקבל שלבים כפולים.
+ */
+export async function importGantt(actor, { name, rows, userIds, trackId }) {
+  const ids = scopeIds(actor);
+  if (ids && userIds.some((u) => !ids.includes(u))) {
+    throw new AppError('E_FORBIDDEN', 'חלק מהעובדים אינם באחריותך');
+  }
+  const created = await withTransaction({ actorId: actor.userId }, async (tx) => {
+    if (trackId) return trackId;
+    const startOn = rows.reduce((m, r) => (r.startOn < m ? r.startOn : m), rows[0].startOn);
+    const [track] = await tx.query(
+      `insert into training_tracks (name, description, start_on) values ($1, $2, $3) returning id`,
+      [name, 'גאנט כללי שנטען מקובץ', startOn],
+    );
+    const days = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+    for (const [index, r] of rows.entries()) {
+      await tx.query(
+        `insert into training_track_items (track_id, title, duration_days, offset_days, display_order)
+         values ($1, $2, $3, $4, $5)`,
+        [track.id, r.title, days(r.startOn, r.dueOn) + 1, days(startOn, r.startOn), (index + 1) * 10],
+      );
+    }
+    return track.id;
+  });
+
+  const [track] = await query('select start_on from training_tracks where id = $1', [created]);
+  let items = 0;
+  for (const userId of userIds) {
+    const out = await applyTrack(actor, userId, { trackId: created, startOn: track?.start_on ?? today() });
+    items += out.created;
+  }
+  return { trackId: created, people: userIds.length, created: items };
 }
